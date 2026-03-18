@@ -28,9 +28,21 @@ benchmark:
   # config_patch merges into config.toml
   # app_patch merges into app.toml
   # genesis_patch merges into genesis.json
-  config_patch: {}
-  app_patch: {}
-  genesis_patch: {}
+  config_patch:
+    log_level: info
+    mempool:
+      type: "app"
+  app_patch:
+    evm:
+      mempool:
+        "operate-exclusively": true
+    json-rpc:
+      api: eth,net,web3,txpool
+  genesis_patch: 
+    consensus:
+      params:
+        block:
+          max_gas: "163000000"
 
   # benchmark shape
   validators: 1
