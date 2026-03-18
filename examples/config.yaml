@@ -1,0 +1,45 @@
+temporal:
+  host_port: 127.0.0.1:7233
+  namespace: default
+  task_queue: EVM_BENCHMARK_TASK_QUEUE
+
+start:
+  workflow_id: evm-benchmark-sample
+
+benchmark:
+  data_dir: /tmp/evm-benchmark/data
+  out_dir: /tmp/evm-benchmark/output
+
+  # runtime mode
+  runner_type: docker
+  docker_image: "evmd-benchmark-base:local"
+  start_node: true
+
+  # patchimage stage
+  patch_image_enabled: false
+  patch_image_to_image: "evmd-benchmark-patched:local"
+  patch_image_source_dir: "/private/tmp/data/out"
+
+  # chain profile
+  chain_config: evmd
+  chains_config_path: ../config/chains.jsonnet
+
+  # optional deep-merge patches
+  # config_patch merges into config.toml
+  # app_patch merges into app.toml
+  # genesis_patch merges into genesis.json
+  config_patch: {}
+  app_patch: {}
+  genesis_patch: {}
+
+  # benchmark shape
+  validators: 1
+  fullnodes: 0
+  num_accounts: 800
+  num_txs: 20
+  num_idle: 20
+
+  # workflow behavior
+  pre_generate_txs: true
+  run_nodes: true
+  validator_generate_load: true
