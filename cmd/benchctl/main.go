@@ -127,16 +127,16 @@ func runPatchImage(args []string) {
 
 	spec := cfg.Benchmark
 	if strings.TrimSpace(*fromImage) != "" {
-		spec.PatchImageFromImage = *fromImage
+		spec.PatchImage.FromImage = *fromImage
 	}
 	if strings.TrimSpace(*toImage) != "" {
-		spec.PatchImageToImage = *toImage
+		spec.PatchImage.ToImage = *toImage
 	}
 	if strings.TrimSpace(*sourceDir) != "" {
-		spec.PatchImageSourceDir = *sourceDir
+		spec.PatchImage.SourceDir = *sourceDir
 	}
 	if strings.TrimSpace(*dst) != "" {
-		spec.PatchImageDest = *dst
+		spec.PatchImage.Dest = *dst
 	}
 
 	act := &activities.Activity{}

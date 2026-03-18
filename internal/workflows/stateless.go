@@ -33,7 +33,7 @@ func StatelessEVMBenchmarkWorkflow(ctx workflow.Context, req messages.WorkflowRe
 	}
 
 	dockerImageOverride := ""
-	if req.Spec.PatchImageEnabled {
+	if req.Spec.PatchImage.Enabled {
 		var patchRes messages.PatchImageResponse
 		if err := workflow.ExecuteActivity(ctx, "PatchImage", messages.PatchImageRequest{Spec: req.Spec}).Get(ctx, &patchRes); err != nil {
 			return messages.WorkflowResponse{}, err

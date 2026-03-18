@@ -203,7 +203,7 @@ func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequ
 func (a *Activity) PatchImage(ctx context.Context, req messages.PatchImageRequest) (messages.PatchImageResponse, error) {
 	spec := req.Spec
 
-	fromImage := strings.TrimSpace(spec.PatchImageFromImage)
+	fromImage := strings.TrimSpace(spec.PatchImage.FromImage)
 	if fromImage == "" {
 		fromImage = strings.TrimSpace(spec.DockerImage)
 	}
@@ -211,12 +211,12 @@ func (a *Activity) PatchImage(ctx context.Context, req messages.PatchImageReques
 		return messages.PatchImageResponse{}, fmt.Errorf("patchimage requires patch_image_from_image or docker_image")
 	}
 
-	toImage := strings.TrimSpace(spec.PatchImageToImage)
+	toImage := strings.TrimSpace(spec.PatchImage.ToImage)
 	if toImage == "" {
 		toImage = fromImage + "-patched"
 	}
 
-	sourceDir := strings.TrimSpace(spec.PatchImageSourceDir)
+	sourceDir := strings.TrimSpace(spec.PatchImage.SourceDir)
 	if sourceDir == "" {
 		outCandidate := filepath.Join(spec.DataDir, "out")
 		if st, err := os.Stat(outCandidate); err == nil && st.IsDir() {
@@ -234,7 +234,7 @@ func (a *Activity) PatchImage(ctx context.Context, req messages.PatchImageReques
 		return messages.PatchImageResponse{}, fmt.Errorf("patchimage source path %q is not a directory", sourceDir)
 	}
 
-	dst := strings.TrimSpace(spec.PatchImageDest)
+	dst := strings.TrimSpace(spec.PatchImage.Dest)
 	if dst == "" {
 		if spec.RunnerType == "docker" {
 			dst = "/data"

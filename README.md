@@ -6,8 +6,8 @@ Temporal-based stateless EVM load testing in Go.
 
 1. `gen`: create benchmark data layout and node targets.
 2. `patchimage`:
-	- docker mode: build a derived image that contains generated benchmark data.
-	- local mode: copy a prepared data layout into `benchmark.data_dir`.
+   - docker mode: build a derived image that contains generated benchmark data.
+   - local mode: copy a prepared data layout into `benchmark.data_dir`.
 3. `gen_txs`: pre-generate deterministic signed EVM transactions per node.
 4. `run`: for each node, send load, detect idle/halt, write `block_stats.log`.
 
@@ -59,11 +59,12 @@ go run ./cmd/benchctl patchimage \
 
 ```yaml
 benchmark:
-  runner_type: docker
-  start_node: true
-  docker_image: "evmd-benchmark-patched:local"
-  patch_image_enabled: false
-  skip_generate_layout: true
+	runner_type: docker
+	start_node: true
+	docker_image: "evmd-benchmark-patched:local"
+	patch_image:
+		enabled: false
+	skip_generate_layout: true
 ```
 
 `skip_generate_layout: true` tells the workflow to reuse `benchmark.data_dir/nodes.json`
@@ -104,6 +105,7 @@ export CHAINS_CONFIG_PATH=./config/chains.jsonnet
 or set `benchmark.chain_config` and `benchmark.chains_config_path` in `examples/config.local.yaml`.
 
 When enabled, these values are sourced from jsonnet and applied automatically:
+
 - `binary` (`cmd`)
 - `chain_id`
 - `address_prefix` (`account-prefix`)
@@ -115,13 +117,15 @@ When enabled, these values are sourced from jsonnet and applied automatically:
 The workflow can perform a patch step directly in Go.
 
 Docker mode:
+
 - build temp Dockerfile with `FROM <fromimage>` and `ADD ./out <dst>`
 - tag to `<toimage>`
 - use the patched image for docker node startup
 
 Local mode:
-- copy `patch_image_source_dir` into `patch_image_dest`
-- if `patch_image_dest` is empty (or `/data`), `benchmark.data_dir` is used
+
+- copy `patch_image.source_dir` into `patch_image.dest`
+- if `patch_image.dest` is empty (or `/data`), `benchmark.data_dir` is used
 - used to mimic the same prepared-layout flow without Docker
 
 Config fields:
@@ -129,10 +133,11 @@ Config fields:
 ```yaml
 benchmark:
 	runner_type: docker # or local
-  start_node: true
-  patch_image_enabled: true
-	patch_image_from_image: your-base-image:tag   # docker-only; optional; defaults to docker_image
-	patch_image_to_image: your-patched-image:tag  # docker-only; optional; defaults to <from>-patched
-  patch_image_source_dir: /private/tmp/data/out # optional; defaults to <data_dir>/out or data_dir
-	patch_image_dest: /data                        # docker default: /data; local default: data_dir
+	start_node: true
+	patch_image:
+		enabled: true
+		from_image: your-base-image:tag   # docker-only; optional; defaults to docker_image
+		to_image: your-patched-image:tag  # docker-only; optional; defaults to <from>-patched
+		source_dir: /private/tmp/data/out # optional; defaults to <data_dir>/out or data_dir
+		dest: /data                       # docker default: /data; local default: data_dir
 ```

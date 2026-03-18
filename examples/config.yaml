@@ -16,9 +16,10 @@ benchmark:
   start_node: true
 
   # patchimage stage
-  patch_image_enabled: false
-  patch_image_to_image: "evmd-benchmark-patched:local"
-  patch_image_source_dir: "/private/tmp/data/out"
+  patch_image:
+    enabled: false
+    to_image: "evmd-benchmark-patched:local"
+    source_dir: "/private/tmp/data/out"
 
   # chain profile
   chain_config: evmd

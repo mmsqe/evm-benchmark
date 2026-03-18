@@ -196,11 +196,11 @@ func applyDefaults(cfg *AppConfig) {
 	if spec.RunnerType == "" {
 		spec.RunnerType = "local"
 	}
-	if spec.PatchImageFromImage == "" {
-		spec.PatchImageFromImage = spec.DockerImage
+	if spec.PatchImage.FromImage == "" {
+		spec.PatchImage.FromImage = spec.DockerImage
 	}
-	if spec.PatchImageDest == "" {
-		spec.PatchImageDest = "/data"
+	if spec.PatchImage.Dest == "" {
+		spec.PatchImage.Dest = "/data"
 	}
 	if spec.DockerNetwork == "" {
 		spec.DockerNetwork = "evm-benchmark"
@@ -303,12 +303,12 @@ func validate(cfg AppConfig, runtimeValidation bool) error {
 	if cfg.Benchmark.RunnerType == "docker" && cfg.Benchmark.StartNode && cfg.Benchmark.DockerImage == "" {
 		return fmt.Errorf("benchmark.docker_image is required when runner_type=docker and start_node=true")
 	}
-	if cfg.Benchmark.PatchImageEnabled {
+	if cfg.Benchmark.PatchImage.Enabled {
 		if !cfg.Benchmark.StartNode {
-			return fmt.Errorf("benchmark.patch_image_enabled requires benchmark.start_node=true")
+			return fmt.Errorf("benchmark.patch_image.enabled requires benchmark.start_node=true")
 		}
-		if cfg.Benchmark.RunnerType == "docker" && cfg.Benchmark.PatchImageFromImage == "" && cfg.Benchmark.DockerImage == "" {
-			return fmt.Errorf("benchmark.patch_image_enabled requires benchmark.patch_image_from_image or benchmark.docker_image")
+		if cfg.Benchmark.RunnerType == "docker" && cfg.Benchmark.PatchImage.FromImage == "" && cfg.Benchmark.DockerImage == "" {
+			return fmt.Errorf("benchmark.patch_image.enabled requires benchmark.patch_image.from_image or benchmark.docker_image")
 		}
 	}
 	return nil

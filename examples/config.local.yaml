@@ -15,7 +15,8 @@ benchmark:
   start_node: true
 
   # patchimage stage
-  patch_image_enabled: false
+  patch_image:
+    enabled: false
 
   # chain profile
   chain_config: evmd

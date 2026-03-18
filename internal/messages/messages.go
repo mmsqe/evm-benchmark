@@ -15,11 +15,7 @@ type BenchmarkSpec struct {
 	SkipGenerateLayout       bool                   `yaml:"skip_generate_layout"`
 	RunnerType               string                 `yaml:"runner_type"`
 	DockerImage              string                 `yaml:"docker_image"`
-	PatchImageEnabled        bool                   `yaml:"patch_image_enabled"`
-	PatchImageFromImage      string                 `yaml:"patch_image_from_image"`
-	PatchImageToImage        string                 `yaml:"patch_image_to_image"`
-	PatchImageSourceDir      string                 `yaml:"patch_image_source_dir"`
-	PatchImageDest           string                 `yaml:"patch_image_dest"`
+	PatchImage               PatchImageConfig       `yaml:"patch_image"`
 	DockerNetwork            string                 `yaml:"docker_network"`
 	DockerCreateNetwork      bool                   `yaml:"docker_create_network"`
 	ChainConfig              string                 `yaml:"chain_config"`
@@ -58,6 +54,14 @@ type BenchmarkSpec struct {
 	ValidatorGenerateLoad    bool                   `yaml:"validator_generate_load"`
 	StartNode                bool                   `yaml:"start_node"`
 	StartArgs                []string               `yaml:"start_args"`
+}
+
+type PatchImageConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	FromImage string `yaml:"from_image"`
+	ToImage   string `yaml:"to_image"`
+	SourceDir string `yaml:"source_dir"`
+	Dest      string `yaml:"dest"`
 }
 
 type WorkflowRequest struct {
