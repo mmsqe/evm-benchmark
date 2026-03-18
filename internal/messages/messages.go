@@ -12,6 +12,7 @@ const (
 type BenchmarkSpec struct {
 	DataDir                  string                 `yaml:"data_dir"`
 	OutDir                   string                 `yaml:"out_dir"`
+	SkipGenerateLayout       bool                   `yaml:"skip_generate_layout"`
 	RunnerType               string                 `yaml:"runner_type"`
 	DockerImage              string                 `yaml:"docker_image"`
 	PatchImageEnabled        bool                   `yaml:"patch_image_enabled"`
@@ -84,6 +85,14 @@ type GenerateLayoutRequest struct {
 }
 
 type GenerateLayoutResponse struct {
+	Nodes []NodeTarget
+}
+
+type LoadLayoutRequest struct {
+	Spec BenchmarkSpec
+}
+
+type LoadLayoutResponse struct {
 	Nodes []NodeTarget
 }
 

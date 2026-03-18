@@ -46,11 +46,13 @@ benchmark:
   # benchmark shape
   validators: 1
   fullnodes: 0
-  num_accounts: 20
-  num_txs: 2
-  num_idle: 5
+  num_accounts: 800
+  num_txs: 20
+  num_idle: 20
 
   # workflow behavior
+  # when true, starter loads existing data_dir/nodes.json and will NOT regenerate node homes/genesis
+  skip_generate_layout: true
   pre_generate_txs: true
   run_nodes: true
   validator_generate_load: true

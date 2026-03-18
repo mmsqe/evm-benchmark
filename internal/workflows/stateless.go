@@ -17,9 +17,19 @@ func StatelessEVMBenchmarkWorkflow(ctx workflow.Context, req messages.WorkflowRe
 	}
 	ctx = workflow.WithActivityOptions(ctx, opts)
 
-	var layout messages.GenerateLayoutResponse
-	if err := workflow.ExecuteActivity(ctx, "GenerateLayout", messages.GenerateLayoutRequest{Spec: req.Spec}).Get(ctx, &layout); err != nil {
-		return messages.WorkflowResponse{}, err
+	var layoutNodes []messages.NodeTarget
+	if req.Spec.SkipGenerateLayout {
+		var loaded messages.LoadLayoutResponse
+		if err := workflow.ExecuteActivity(ctx, "LoadLayout", messages.LoadLayoutRequest{Spec: req.Spec}).Get(ctx, &loaded); err != nil {
+			return messages.WorkflowResponse{}, err
+		}
+		layoutNodes = loaded.Nodes
+	} else {
+		var layout messages.GenerateLayoutResponse
+		if err := workflow.ExecuteActivity(ctx, "GenerateLayout", messages.GenerateLayoutRequest{Spec: req.Spec}).Get(ctx, &layout); err != nil {
+			return messages.WorkflowResponse{}, err
+		}
+		layoutNodes = layout.Nodes
 	}
 
 	dockerImageOverride := ""
@@ -32,8 +42,8 @@ func StatelessEVMBenchmarkWorkflow(ctx workflow.Context, req messages.WorkflowRe
 	}
 
 	if req.Spec.PreGenerateTxs {
-		futures := make([]workflow.Future, 0, len(layout.Nodes))
-		for _, n := range layout.Nodes {
+		futures := make([]workflow.Future, 0, len(layoutNodes))
+		for _, n := range layoutNodes {
 			f := workflow.ExecuteActivity(ctx, "GenerateTxs", messages.GenerateTxsRequest{Spec: req.Spec, Target: n})
 			futures = append(futures, f)
 		}
@@ -47,8 +57,8 @@ func StatelessEVMBenchmarkWorkflow(ctx workflow.Context, req messages.WorkflowRe
 
 	result := messages.WorkflowResponse{}
 	if req.Spec.RunNodes {
-		nodeFutures := make([]workflow.Future, 0, len(layout.Nodes))
-		for _, n := range layout.Nodes {
+		nodeFutures := make([]workflow.Future, 0, len(layoutNodes))
+		for _, n := range layoutNodes {
 			f := workflow.ExecuteActivity(ctx, "RunNode", messages.RunNodeRequest{Spec: req.Spec, Target: n, DockerImageOverride: dockerImageOverride})
 			nodeFutures = append(nodeFutures, f)
 		}

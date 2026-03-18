@@ -63,7 +63,12 @@ benchmark:
   start_node: true
   docker_image: "evmd-benchmark-patched:local"
   patch_image_enabled: false
+  skip_generate_layout: true
 ```
+
+`skip_generate_layout: true` tells the workflow to reuse `benchmark.data_dir/nodes.json`
+and existing node home folders. This avoids rerunning bootstrap and rewriting
+`config/genesis.json` on each `starter` run.
 
 2. Start Temporal server:
 

@@ -111,6 +111,21 @@ func (a *Activity) GenerateLayout(ctx context.Context, req messages.GenerateLayo
 	return messages.GenerateLayoutResponse{Nodes: nodes}, nil
 }
 
+func (a *Activity) LoadLayout(ctx context.Context, req messages.LoadLayoutRequest) (messages.LoadLayoutResponse, error) {
+	_ = ctx
+
+	nodesPath := filepath.Join(req.Spec.DataDir, "nodes.json")
+	var nodes []messages.NodeTarget
+	if err := readJSON(nodesPath, &nodes); err != nil {
+		return messages.LoadLayoutResponse{}, fmt.Errorf("load existing node layout %s: %w", nodesPath, err)
+	}
+	if len(nodes) == 0 {
+		return messages.LoadLayoutResponse{}, fmt.Errorf("existing node layout %s is empty", nodesPath)
+	}
+
+	return messages.LoadLayoutResponse{Nodes: nodes}, nil
+}
+
 func enrichGenesisPatchFromChainConfig(spec *messages.BenchmarkSpec) error {
 	if spec == nil || strings.TrimSpace(spec.ChainConfig) == "" {
 		return nil

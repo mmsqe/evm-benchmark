@@ -36,6 +36,7 @@ func main() {
 	act := &activities.Activity{}
 	w.RegisterWorkflow(workflows.StatelessEVMBenchmarkWorkflow)
 	w.RegisterActivityWithOptions(act.GenerateLayout, activity.RegisterOptions{Name: "GenerateLayout"})
+	w.RegisterActivityWithOptions(act.LoadLayout, activity.RegisterOptions{Name: "LoadLayout"})
 	w.RegisterActivityWithOptions(act.PatchImage, activity.RegisterOptions{Name: "PatchImage"})
 	w.RegisterActivityWithOptions(act.GenerateTxs, activity.RegisterOptions{Name: "GenerateTxs"})
 	w.RegisterActivityWithOptions(act.RunNode, activity.RegisterOptions{Name: "RunNode"})
