@@ -20,6 +20,8 @@ benchmark:
   # chain profile
   chain_config: evmd
   chains_config_path: ../config/chains.jsonnet
+  # optional: if set, account keys are derived from this phrase deterministically
+  base_mnemonic: "notable error gospel wave pair ugly measure elite toddler cost various fly make eye ketchup despair slab throw tribe swarm word fruit into inmate"
 
   # optional deep-merge patches
   # config_patch merges into config.toml

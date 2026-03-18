@@ -3,8 +3,6 @@ package activities
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -21,6 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mmsqe/evm-benchmark/internal/bench"
+	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 	tomlv2 "github.com/pelletier/go-toml/v2"
 )
@@ -562,7 +561,7 @@ func bootstrapNodesAndGenesis(ctx context.Context, spec messages.BenchmarkSpec, 
 			return fmt.Errorf("init node %d: %w", node.GlobalSeq, err)
 		}
 
-		validatorKey, err := deterministicKey(node.GlobalSeq, 0)
+		validatorKey, err := keygen.DeterministicKey(node.GlobalSeq, 0, spec.BaseMnemonic)
 		if err != nil {
 			return err
 		}
@@ -636,7 +635,7 @@ func bootstrapNodesAndGenesis(ctx context.Context, spec messages.BenchmarkSpec, 
 	accounts := make([]bulkAccount, 0, len(nodes)*(spec.NumAccounts+1))
 	for _, node := range nodes {
 		if node.GlobalSeq != 0 {
-			addr, err := bech32Address(node.GlobalSeq, 0, spec.AddressPrefix)
+			addr, err := bech32Address(node.GlobalSeq, 0, spec.AddressPrefix, spec.BaseMnemonic)
 			if err != nil {
 				return err
 			}
@@ -650,7 +649,7 @@ func bootstrapNodesAndGenesis(ctx context.Context, spec messages.BenchmarkSpec, 
 		}
 
 		for i := 1; i <= spec.NumAccounts; i++ {
-			acct, err := bech32Address(node.GlobalSeq, i, spec.AddressPrefix)
+			acct, err := bech32Address(node.GlobalSeq, i, spec.AddressPrefix, spec.BaseMnemonic)
 			if err != nil {
 				return err
 			}
@@ -932,15 +931,8 @@ func chainCmd(ctx context.Context, binary string, stdin []byte, args ...string) 
 	return out, nil
 }
 
-func deterministicKey(globalSeq, index int) (*ecdsa.PrivateKey, error) {
-	var raw [32]byte
-	seed := (uint64(globalSeq+1) << 32) | uint64(index)
-	binary.BigEndian.PutUint64(raw[24:], seed)
-	return crypto.ToECDSA(raw[:])
-}
-
-func bech32Address(globalSeq, index int, prefix string) (string, error) {
-	key, err := deterministicKey(globalSeq, index)
+func bech32Address(globalSeq, index int, prefix, baseMnemonic string) (string, error) {
+	key, err := keygen.DeterministicKey(globalSeq, index, baseMnemonic)
 	if err != nil {
 		return "", err
 	}

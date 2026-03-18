@@ -30,6 +30,7 @@ type BenchmarkSpec struct {
 	ChainID                  string                 `yaml:"chain_id"`
 	AddressPrefix            string                 `yaml:"address_prefix"`
 	Denom                    string                 `yaml:"denom"`
+	BaseMnemonic             string                 `yaml:"base_mnemonic"`
 	HostnameTemplate         string                 `yaml:"hostname_template"`
 	RPCURLTemplate           string                 `yaml:"rpc_url_template"`
 	TendermintURLTemplate    string                 `yaml:"tendermint_url_template"`
