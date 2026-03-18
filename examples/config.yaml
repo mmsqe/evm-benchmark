@@ -7,13 +7,18 @@ start:
   workflow_id: evm-benchmark-sample
 
 benchmark:
-  data_dir: /tmp/evm-benchmark/data
+  data_dir: /private/tmp/data/out
   out_dir: /tmp/evm-benchmark/output
 
   # runtime mode
   runner_type: docker
-  docker_image: "evmd-benchmark-base:local"
+  docker_image: "evmd-benchmark-patched:local"
   start_node: true
+  docker_keep_containers: true
+  docker_volumes:
+    - /tmp/colima:/outputs
+  docker_env:
+    JOB_COMPLETION_INDEX: "0"
 
   # patchimage stage
   patch_image:
@@ -48,7 +53,7 @@ benchmark:
           max_gas: "163000000"
 
   # benchmark shape
-  validators: 1
+  validators: 2
   fullnodes: 0
   num_accounts: 800
   num_txs: 20

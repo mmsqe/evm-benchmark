@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -323,11 +324,23 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 	if strings.TrimSpace(req.DockerImageOverride) != "" {
 		dockerImage = strings.TrimSpace(req.DockerImageOverride)
 	}
-	containerHome := "/data"
+	containerHome := path.Join("/data", target.Group, fmt.Sprintf("%d", target.GroupSeq))
 	usePatchedImageLayout := false
-	if strings.TrimSpace(req.DockerImageOverride) != "" {
-		containerHome = path.Join("/data", target.Group, fmt.Sprintf("%d", target.GroupSeq))
+	if spec.RunnerType == "docker" && spec.SkipGenerateLayout {
+		// Reuse pre-generated layout already embedded in the docker image.
 		usePatchedImageLayout = true
+	}
+	if strings.TrimSpace(req.DockerImageOverride) != "" {
+		usePatchedImageLayout = true
+	}
+	if spec.RunnerType == "docker" && !usePatchedImageLayout {
+		// If host-side node home isn't present, assume docker image already contains
+		// the prepared layout under /data/<group>/<seq> (patchimage flow).
+		hostGenesisPath := filepath.Join(target.Home, "config", "genesis.json")
+		_, err := os.Stat(hostGenesisPath)
+		if err != nil {
+			usePatchedImageLayout = true
+		}
 	}
 	if spec.StartNode {
 		if spec.Binary == "" {
@@ -336,7 +349,14 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 
 		if spec.RunnerType == "docker" {
 			if spec.DockerCreateNetwork {
-				_, _ = chainCmd(ctx, "docker", nil, "network", "create", spec.DockerNetwork)
+				if _, err := chainCmd(ctx, "docker", nil, "network", "create", spec.DockerNetwork); err != nil {
+					if !strings.Contains(err.Error(), "already exists") {
+						return messages.NodeRunResult{}, fmt.Errorf("create docker network %q: %w", spec.DockerNetwork, err)
+					}
+				}
+			}
+			if err := ensureDockerVolumeHostDirs(spec.DockerVolumes); err != nil {
+				return messages.NodeRunResult{}, fmt.Errorf("prepare docker volume host dirs: %w", err)
 			}
 
 			containerName = fmt.Sprintf("evm-benchmark-%d", target.GlobalSeq)
@@ -345,22 +365,45 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 				binaryInImage = path.Base(spec.Binary)
 			}
 
-			dockerArgs := []string{
-				"run", "-d", "--rm",
+			dockerArgs := []string{"run", "-d"}
+			if !spec.DockerKeepContainers {
+				dockerArgs = append(dockerArgs, "--rm")
+			}
+			dockerArgs = append(dockerArgs,
 				"--name", containerName,
 				"--hostname", target.Hostname,
 				"--network", spec.DockerNetwork,
 				"-p", fmt.Sprintf("%d:26657", target.HostRPCPort),
 				"-p", fmt.Sprintf("%d:8545", target.HostEVMRPCPort),
-			}
+			)
 			if !usePatchedImageLayout {
-				dockerArgs = append(dockerArgs, "-v", fmt.Sprintf("%s:/data", target.Home))
+				dockerArgs = append(dockerArgs, "-v", fmt.Sprintf("%s:%s", target.Home, containerHome))
+			}
+			for _, volume := range spec.DockerVolumes {
+				volume = strings.TrimSpace(volume)
+				if volume == "" {
+					continue
+				}
+				dockerArgs = append(dockerArgs, "-v", volume)
+			}
+			if len(spec.DockerEnv) > 0 {
+				keys := make([]string, 0, len(spec.DockerEnv))
+				for k := range spec.DockerEnv {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					dockerArgs = append(dockerArgs, "-e", fmt.Sprintf("%s=%s", k, spec.DockerEnv[k]))
+				}
 			}
 			dockerArgs = append(dockerArgs,
 				dockerImage,
 				"/bin/"+binaryInImage,
 				"start", "--home", containerHome,
 			)
+			for _, bindArg := range dockerDefaultBindArgs(spec.StartArgs) {
+				dockerArgs = append(dockerArgs, bindArg)
+			}
 			if strings.TrimSpace(spec.ChainID) != "" {
 				dockerArgs = append(dockerArgs, "--chain-id", spec.ChainID)
 			}
@@ -368,11 +411,13 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 			if _, err := chainCmd(ctx, "docker", nil, dockerArgs...); err != nil {
 				return messages.NodeRunResult{}, fmt.Errorf("start node docker container: %w", err)
 			}
-			defer func() {
-				if containerName != "" {
-					_, _ = chainCmd(context.Background(), "docker", nil, "rm", "-f", containerName)
-				}
-			}()
+			if !spec.DockerKeepContainers {
+				defer func() {
+					if containerName != "" {
+						_, _ = chainCmd(context.Background(), "docker", nil, "rm", "-f", containerName)
+					}
+				}()
+			}
 		} else {
 			args := []string{"start", "--home", target.Home}
 			if strings.TrimSpace(spec.ChainID) != "" {
@@ -408,9 +453,19 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 	}
 
 	if err := bench.WaitForPort(ctx, host, rpcPort, 2*time.Minute); err != nil {
+		if spec.RunnerType == "docker" {
+			if logPath, dumpErr := dumpDockerLogs(spec, target, containerName, "startup-rpc"); dumpErr == nil {
+				return messages.NodeRunResult{}, fmt.Errorf("wait tendermint rpc: %w (docker logs: %s)", err, logPath)
+			}
+		}
 		return messages.NodeRunResult{}, fmt.Errorf("wait tendermint rpc: %w", err)
 	}
 	if err := bench.WaitForPort(ctx, host, evmPort, 2*time.Minute); err != nil {
+		if spec.RunnerType == "docker" {
+			if logPath, dumpErr := dumpDockerLogs(spec, target, containerName, "startup-evm-rpc"); dumpErr == nil {
+				return messages.NodeRunResult{}, fmt.Errorf("wait evm rpc: %w (docker logs: %s)", err, logPath)
+			}
+		}
 		return messages.NodeRunResult{}, fmt.Errorf("wait evm rpc: %w", err)
 	}
 
@@ -551,6 +606,83 @@ func copyDir(src, dst string) error {
 		}
 		return nil
 	})
+}
+
+func ensureDockerVolumeHostDirs(volumes []string) error {
+	for _, volume := range volumes {
+		volume = strings.TrimSpace(volume)
+		if volume == "" {
+			continue
+		}
+
+		parts := strings.Split(volume, ":")
+		if len(parts) < 2 {
+			continue // likely a named volume
+		}
+
+		hostPath := strings.TrimSpace(parts[0])
+		if hostPath == "" || !strings.HasPrefix(hostPath, "/") {
+			continue
+		}
+
+		if err := os.MkdirAll(hostPath, 0o755); err != nil {
+			return fmt.Errorf("create host mount dir %s: %w", hostPath, err)
+		}
+	}
+	return nil
+}
+
+func dockerDefaultBindArgs(startArgs []string) []string {
+	args := make([]string, 0, 3)
+	if !hasStartArgPrefix(startArgs, "--rpc.laddr") {
+		args = append(args, "--rpc.laddr=tcp://0.0.0.0:26657")
+	}
+	if !hasStartArgPrefix(startArgs, "--json-rpc.address") {
+		args = append(args, "--json-rpc.address=0.0.0.0:8545")
+	}
+	if !hasStartArgPrefix(startArgs, "--json-rpc.ws-address") {
+		args = append(args, "--json-rpc.ws-address=0.0.0.0:8546")
+	}
+	return args
+}
+
+func hasStartArgPrefix(startArgs []string, prefix string) bool {
+	for i := 0; i < len(startArgs); i++ {
+		arg := strings.TrimSpace(startArgs[i])
+		if arg == prefix {
+			return true
+		}
+		if strings.HasPrefix(arg, prefix+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func dumpDockerLogs(spec messages.BenchmarkSpec, target messages.NodeTarget, containerName, reason string) (string, error) {
+	if strings.TrimSpace(containerName) == "" {
+		return "", fmt.Errorf("container name is empty")
+	}
+
+	out, err := chainCmd(context.Background(), "docker", nil, "logs", containerName)
+	if err != nil {
+		out = []byte(err.Error())
+	}
+
+	logDir := strings.TrimSpace(spec.OutDir)
+	if logDir == "" {
+		logDir = filepath.Join(spec.DataDir, "docker-logs")
+	}
+	if mkErr := os.MkdirAll(logDir, 0o755); mkErr != nil {
+		return "", fmt.Errorf("create docker log dir %s: %w", logDir, mkErr)
+	}
+
+	logPath := filepath.Join(logDir, fmt.Sprintf("node_%d_%s.log", target.GlobalSeq, reason))
+	if writeErr := os.WriteFile(logPath, out, 0o644); writeErr != nil {
+		return "", fmt.Errorf("write docker log %s: %w", logPath, writeErr)
+	}
+
+	return logPath, nil
 }
 
 func bootstrapNodesAndGenesis(ctx context.Context, spec messages.BenchmarkSpec, nodes []messages.NodeTarget) error {
@@ -790,6 +922,9 @@ func patchConfigToml(home string, nodes []messages.NodeTarget, spec messages.Ben
 	setNested(cfg, []string{"mempool", "recheck"}, false)
 	setNested(cfg, []string{"mempool", "size"}, int64(10000))
 	setNested(cfg, []string{"consensus", "timeout_commit"}, "1s")
+	if spec.RunnerType == "docker" {
+		setNested(cfg, []string{"rpc", "laddr"}, "tcp://0.0.0.0:26657")
+	}
 	mergeMaps(cfg, spec.ConfigPatch)
 
 	outCfg, err := tomlv2.Marshal(cfg)
@@ -811,6 +946,10 @@ func patchConfigToml(home string, nodes []messages.NodeTarget, spec messages.Ben
 	}
 	setNested(appCfg, []string{"minimum-gas-prices"}, fmt.Sprintf("0%s", spec.Denom))
 	setNested(appCfg, []string{"json-rpc", "enable"}, true)
+	if spec.RunnerType == "docker" {
+		setNested(appCfg, []string{"json-rpc", "address"}, "0.0.0.0:8545")
+		setNested(appCfg, []string{"json-rpc", "ws-address"}, "0.0.0.0:8546")
+	}
 	mergeMaps(appCfg, spec.AppPatch)
 
 	outApp, err := tomlv2.Marshal(appCfg)

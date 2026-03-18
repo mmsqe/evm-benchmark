@@ -15,6 +15,9 @@ type BenchmarkSpec struct {
 	SkipGenerateLayout       bool                   `yaml:"skip_generate_layout"`
 	RunnerType               string                 `yaml:"runner_type"`
 	DockerImage              string                 `yaml:"docker_image"`
+	DockerVolumes            []string               `yaml:"docker_volumes"`
+	DockerKeepContainers     bool                   `yaml:"docker_keep_containers"`
+	DockerEnv                map[string]string      `yaml:"docker_env"`
 	PatchImage               PatchImageConfig       `yaml:"patch_image"`
 	DockerNetwork            string                 `yaml:"docker_network"`
 	DockerCreateNetwork      bool                   `yaml:"docker_create_network"`

@@ -20,7 +20,7 @@ Temporal-based stateless EVM load testing in Go.
 - `internal/activities/stateless.go`: concrete activity implementations.
 - `internal/bench`: EVM tx generation, JSON-RPC send, idle/halt detection, TPS stats.
 - `config/chains.jsonnet`: local chain profiles used by `benchmark.chain_config`.
-- `examples/config.local.yaml`: runnable config sample.
+- `examples/config.yaml`: runnable config sample.
 
 ## Steps
 
@@ -34,6 +34,9 @@ export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
 
 scripts/build-evmd-testground.sh --tag evmd-testground:latest
 
+# Optional: pin to a specific cosmos/evm commit SHA or ref
+# scripts/build-evmd-testground.sh --tag evmd-testground:latest --commit-sha <sha-or-ref>
+
 go run ./cmd/benchctl build-image \
 	--dockerfile ./docker/base.Dockerfile \
 	--context . \
@@ -41,12 +44,12 @@ go run ./cmd/benchctl build-image \
 	--tag evmd-benchmark-base:local
 
 rm -rf /tmp/data && go run ./cmd/benchctl gen \
-	--config ./examples/config.local.yaml \
+	--config ./examples/config.yaml \
 	--data-root /private/tmp/data \
 	--clean
 
 go run ./cmd/benchctl patchimage \
-	--config ./examples/config.local.yaml \
+	--config ./examples/config.yaml \
 	--from-image evmd-benchmark-base:local \
 	--to-image evmd-benchmark-patched:local \
 	--source-dir /private/tmp/data/out \
@@ -55,13 +58,18 @@ go run ./cmd/benchctl patchimage \
 
 ### 2. Run Benchmark With Temporal
 
-1. Ensure `examples/config.local.yaml` points to the patched image:
+1. Ensure `examples/config.yaml` points to the patched image:
 
 ```yaml
 benchmark:
 	runner_type: docker
 	start_node: true
 	docker_image: "evmd-benchmark-patched:local"
+	docker_keep_containers: true
+	docker_volumes:
+		- /tmp/colima:/outputs
+	docker_env:
+		JOB_COMPLETION_INDEX: "0"
 	patch_image:
 		enabled: false
 	skip_generate_layout: true
@@ -70,6 +78,19 @@ benchmark:
 `skip_generate_layout: true` tells the workflow to reuse `benchmark.data_dir/nodes.json`
 and existing node home folders. This avoids rerunning bootstrap and rewriting
 `config/genesis.json` on each `starter` run.
+
+When using pre-generated layout from `benchctl gen --data-root <root>`, set
+`benchmark.data_dir` to `<root>/out` so node homes resolve as
+`<data_dir>/validators/<seq>` and `<data_dir>/fullnodes/<seq>`.
+
+When startup fails (for example timeout waiting for `127.0.0.1:26657`), the
+runner now writes container logs to host files:
+
+- `<benchmark.out_dir>/node_<n>_startup-rpc.log`, or
+- `<benchmark.data_dir>/docker-logs/node_<n>_startup-rpc.log` if `out_dir` is empty.
+
+Set `docker_keep_containers: true` to keep failed containers for manual debug
+with `docker ps -a` and `docker logs`.
 
 2. Start Temporal server:
 
@@ -80,13 +101,13 @@ temporal server start-dev --ip 127.0.0.1 --port 7233
 3. Start worker:
 
 ```bash
-go run ./cmd/worker -config ./examples/config.local.yaml
+go run ./cmd/worker -config ./examples/config.yaml
 ```
 
 4. Start workflow:
 
 ```bash
-go run ./cmd/starter -config ./examples/config.local.yaml
+go run ./cmd/starter -config ./examples/config.yaml
 ```
 
 5. Check results in `benchmark.out_dir` (default `/tmp/evm-benchmark/output`).
@@ -102,7 +123,7 @@ export CHAIN_CONFIG=evmd
 export CHAINS_CONFIG_PATH=./config/chains.jsonnet
 ```
 
-or set `benchmark.chain_config` and `benchmark.chains_config_path` in `examples/config.local.yaml`.
+or set `benchmark.chain_config` and `benchmark.chains_config_path` in `examples/config.yaml`.
 
 When enabled, these values are sourced from jsonnet and applied automatically:
 
@@ -111,6 +132,11 @@ When enabled, these values are sourced from jsonnet and applied automatically:
 - `address_prefix` (`account-prefix`)
 - `denom` (`evm_denom`)
 - `evm_chain_id`
+
+### Build Notes
+
+`scripts/build-evmd-testground.sh` now compiles `evmd` inside Docker using
+`docker/evmd.Dockerfile`, so macOS host binary format mismatches are avoided.
 
 ### `patchimage`
 
@@ -134,6 +160,11 @@ Config fields:
 benchmark:
 	runner_type: docker # or local
 	start_node: true
+	docker_keep_containers: true         # optional; keep containers after failures
+	docker_volumes:
+		- /tmp/colima:/outputs             # optional extra mounts, same format as docker -v
+	docker_env:
+		JOB_COMPLETION_INDEX: "0"         # optional key/value env vars
 	patch_image:
 		enabled: true
 		from_image: your-base-image:tag   # docker-only; optional; defaults to docker_image
