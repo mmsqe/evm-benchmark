@@ -62,8 +62,8 @@ func (a *Activity) GenerateLayout(ctx context.Context, req messages.GenerateLayo
 		hostRPCPort := spec.RPCPort + globalSeq
 		hostEVMRPCPort := spec.EVMRPCPort + globalSeq
 
-		rpcURL := fmt.Sprintf(spec.RPCURLTemplate, hostname)
-		tmURL := fmt.Sprintf(spec.TendermintURLTemplate, hostname)
+		rpcURL := fmt.Sprintf("http://127.0.0.1:%d", spec.EVMRPCPort)
+		tmURL := fmt.Sprintf("http://127.0.0.1:%d", spec.RPCPort)
 		if spec.RunnerType == "docker" {
 			rpcURL = fmt.Sprintf("http://127.0.0.1:%d", hostEVMRPCPort)
 			tmURL = fmt.Sprintf("http://127.0.0.1:%d", hostRPCPort)
@@ -385,10 +385,7 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 		}
 	}
 
-	host := target.Hostname
-	if spec.RunnerType == "docker" || strings.TrimSpace(host) == "" {
-		host = "127.0.0.1"
-	}
+	host := "127.0.0.1"
 	rpcPort := spec.RPCPort
 	evmPort := spec.EVMRPCPort
 	if spec.RunnerType == "docker" {
@@ -396,18 +393,15 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 		evmPort = target.HostEVMRPCPort
 	}
 
-	if err := bench.WaitForPort(ctx, host, rpcPort, 10*time.Minute); err != nil {
+	if err := bench.WaitForPort(ctx, host, rpcPort, 2*time.Minute); err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("wait tendermint rpc: %w", err)
 	}
-	if err := bench.WaitForPort(ctx, host, evmPort, 10*time.Minute); err != nil {
+	if err := bench.WaitForPort(ctx, host, evmPort, 2*time.Minute); err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("wait evm rpc: %w", err)
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	rpcURL := target.RPCURL
-	if spec.RunnerType == "docker" {
-		rpcURL = fmt.Sprintf("http://127.0.0.1:%d", target.HostEVMRPCPort)
-	}
+	rpcURL := fmt.Sprintf("http://127.0.0.1:%d", evmPort)
 
 	return doRun(ctx, client, spec, target, rpcURL, txs)
 }
@@ -420,7 +414,7 @@ func doRun(
 	rpcURL string,
 	txs []string,
 ) (messages.NodeRunResult, error) {
-	if err := bench.WaitForHeight(ctx, client, rpcURL, spec.MinReadyHeight, 10*time.Minute); err != nil {
+	if err := bench.WaitForHeight(ctx, client, rpcURL, spec.MinReadyHeight, 2*time.Minute); err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("wait ready height: %w", err)
 	}
 
