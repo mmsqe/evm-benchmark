@@ -241,6 +241,9 @@ func applyDefaults(cfg *AppConfig) {
 	if spec.NumIdle == 0 {
 		spec.NumIdle = 20
 	}
+	if spec.BroadcastConcurrency == 0 {
+		spec.BroadcastConcurrency = 32
+	}
 	if spec.IdlePollIntervalSeconds == 0 {
 		spec.IdlePollIntervalSeconds = 5
 	}

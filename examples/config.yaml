@@ -61,6 +61,8 @@ benchmark:
   num_accounts: 8000
   num_txs: 40
   num_idle: 20
+  # cap concurrent eth_sendRawTransaction requests to avoid exhausting local sockets
+  broadcast_concurrency: 32
 
   # workflow behavior
   # when true, starter loads existing data_dir/nodes.json and will NOT regenerate node homes/genesis

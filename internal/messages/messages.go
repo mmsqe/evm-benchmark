@@ -55,6 +55,7 @@ type BenchmarkSpec struct {
 	PreGenerateTxs           bool                   `yaml:"pre_generate_txs"`
 	RunNodes                 bool                   `yaml:"run_nodes"`
 	ValidatorGenerateLoad    bool                   `yaml:"validator_generate_load"`
+	BroadcastConcurrency     int                    `yaml:"broadcast_concurrency"`
 	StartNode                bool                   `yaml:"start_node"`
 	StartArgs                []string               `yaml:"start_args"`
 }

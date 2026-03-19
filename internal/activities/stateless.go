@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -383,6 +384,10 @@ func (a *Activity) PatchImage(ctx context.Context, req messages.PatchImageReques
 
 func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (messages.NodeRunResult, error) {
 	spec := req.Spec
+	broadcastConcurrency := spec.BroadcastConcurrency
+	if broadcastConcurrency < 1 {
+		broadcastConcurrency = 1
+	}
 	target := req.Target
 	if target.Group == "validators" && !spec.ValidatorGenerateLoad {
 		return messages.NodeRunResult{GlobalSeq: target.GlobalSeq}, nil
@@ -545,9 +550,22 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 		return messages.NodeRunResult{}, fmt.Errorf("wait evm rpc: %w", err)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     false,
+		MaxIdleConns:          256,
+		MaxIdleConnsPerHost:   128,
+		MaxConnsPerHost:       broadcastConcurrency,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	client := &http.Client{Timeout: 10 * time.Second, Transport: transport}
+	defer transport.CloseIdleConnections()
 	rpcURL := fmt.Sprintf("http://127.0.0.1:%d", evmPort)
 
+	spec.BroadcastConcurrency = broadcastConcurrency
 	return doRun(ctx, client, spec, target, rpcURL, txs)
 }
 
@@ -563,7 +581,7 @@ func doRun(
 		return messages.NodeRunResult{}, fmt.Errorf("wait ready height: %w", err)
 	}
 
-	bench.BroadcastRawTxs(ctx, client, rpcURL, txs, 128)
+	bench.BroadcastRawTxs(ctx, client, rpcURL, txs, spec.BroadcastConcurrency)
 
 	if err := bench.DetectIdleOrHalt(
 		ctx,
