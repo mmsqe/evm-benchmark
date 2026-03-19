@@ -1,6 +1,7 @@
 package activities
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/hex"
@@ -212,13 +213,30 @@ func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequ
 	)
 	logger.Info("generate txs started", "node", req.Target.GlobalSeq, "accounts", req.Spec.NumAccounts, "txs_per_account", req.Spec.NumTxs)
 
+	txDir := filepath.Join(req.Spec.DataDir, "txs")
+	if err := os.MkdirAll(txDir, 0o755); err != nil {
+		return 0, fmt.Errorf("create tx dir: %w", err)
+	}
+	txPath := filepath.Join(txDir, fmt.Sprintf("%d.json", req.Target.GlobalSeq))
+	txFile, err := os.Create(txPath)
+	if err != nil {
+		return 0, fmt.Errorf("create tx file: %w", err)
+	}
+	defer txFile.Close()
+
+	writer := bufio.NewWriterSize(txFile, 1<<20)
+	if _, err := writer.WriteString("["); err != nil {
+		return 0, fmt.Errorf("write tx json header: %w", err)
+	}
+	first := true
+
 	lastHeartbeat := time.Now()
 	lastProgressLog := time.Now()
 	progressStep := req.Spec.NumAccounts / 20
 	if progressStep < 1 {
 		progressStep = 1
 	}
-	txs, err := bench.GenerateSignedTxsWithProgress(req.Spec, req.Target.GlobalSeq, func(done, total int) {
+	txCount, err := bench.GenerateSignedTxsStream(req.Spec, req.Target.GlobalSeq, func(done, total int) {
 		if done == total || done == 1 || time.Since(lastHeartbeat) >= 15*time.Second {
 			activity.RecordHeartbeat(ctx, map[string]int{"accounts_done": done, "accounts_total": total})
 			lastHeartbeat = time.Now()
@@ -228,21 +246,35 @@ func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequ
 			logger.Info("generate txs progress", "node", req.Target.GlobalSeq, "accounts_done", done, "accounts_total", total, "percent", percent)
 			lastProgressLog = time.Now()
 		}
+	}, func(raw string) error {
+		if !first {
+			if _, err := writer.WriteString(","); err != nil {
+				return fmt.Errorf("write tx separator: %w", err)
+			}
+		}
+		first = false
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			return fmt.Errorf("encode tx: %w", err)
+		}
+		if _, err := writer.Write(encoded); err != nil {
+			return fmt.Errorf("write tx: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return 0, err
 	}
 
-	txDir := filepath.Join(req.Spec.DataDir, "txs")
-	if err := os.MkdirAll(txDir, 0o755); err != nil {
-		return 0, fmt.Errorf("create tx dir: %w", err)
+	if _, err := writer.WriteString("]"); err != nil {
+		return 0, fmt.Errorf("write tx json trailer: %w", err)
 	}
-	if err := writeJSON(filepath.Join(txDir, fmt.Sprintf("%d.json", req.Target.GlobalSeq)), txs); err != nil {
-		return 0, err
+	if err := writer.Flush(); err != nil {
+		return 0, fmt.Errorf("flush tx file: %w", err)
 	}
-	logger.Info("generate txs completed", "node", req.Target.GlobalSeq, "total_txs", len(txs))
+	logger.Info("generate txs completed", "node", req.Target.GlobalSeq, "total_txs", txCount)
 	_ = ctx
-	return len(txs), nil
+	return txCount, nil
 }
 
 func (a *Activity) PatchImage(ctx context.Context, req messages.PatchImageRequest) (messages.PatchImageResponse, error) {

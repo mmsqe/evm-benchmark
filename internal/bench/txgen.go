@@ -29,40 +29,61 @@ func GenerateSignedTxs(spec messages.BenchmarkSpec, globalSeq int) ([]string, er
 }
 
 func GenerateSignedTxsWithProgress(spec messages.BenchmarkSpec, globalSeq int, onAccountDone func(done, total int)) ([]string, error) {
+	result := make([]string, 0, spec.NumAccounts*spec.NumTxs)
+	_, err := generateSignedTxs(spec, globalSeq, onAccountDone, func(raw string) error {
+		result = append(result, raw)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func GenerateSignedTxsStream(spec messages.BenchmarkSpec, globalSeq int, onAccountDone func(done, total int), onTx func(raw string) error) (int, error) {
+	return generateSignedTxs(spec, globalSeq, onAccountDone, onTx)
+}
+
+func generateSignedTxs(spec messages.BenchmarkSpec, globalSeq int, onAccountDone func(done, total int), onTx func(raw string) error) (int, error) {
 	chainID := big.NewInt(spec.EVMChainID)
 	gasPrice := big.NewInt(spec.GasPriceWei)
-
-	result := make([]string, 0, spec.NumAccounts*spec.NumTxs)
+	txCount := 0
 	for accountIndex := 0; accountIndex < spec.NumAccounts; accountIndex++ {
 		key, err := keygen.DeterministicKey(globalSeq, accountIndex+1, spec.BaseMnemonic)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 
 		from := crypto.PubkeyToAddress(key.PublicKey)
 		for nonce := 0; nonce < spec.NumTxs; nonce++ {
 			tx, err := makeTx(spec, from, uint64(nonce), gasPrice)
 			if err != nil {
-				return nil, err
+				return 0, err
 			}
 
 			signed, err := types.SignTx(tx, types.NewLondonSigner(chainID), key)
 			if err != nil {
-				return nil, fmt.Errorf("sign tx: %w", err)
+				return 0, fmt.Errorf("sign tx: %w", err)
 			}
 
 			raw, err := signed.MarshalBinary()
 			if err != nil {
-				return nil, fmt.Errorf("marshal tx: %w", err)
+				return 0, fmt.Errorf("marshal tx: %w", err)
 			}
-			result = append(result, "0x"+common.Bytes2Hex(raw))
+
+			if onTx != nil {
+				if err := onTx("0x" + common.Bytes2Hex(raw)); err != nil {
+					return 0, err
+				}
+			}
+			txCount++
 		}
 		if onAccountDone != nil {
 			onAccountDone(accountIndex+1, spec.NumAccounts)
 		}
 	}
 
-	return result, nil
+	return txCount, nil
 }
 
 func makeTx(spec messages.BenchmarkSpec, from common.Address, nonce uint64, gasPrice *big.Int) (*types.Transaction, error) {
