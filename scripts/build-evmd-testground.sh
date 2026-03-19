@@ -43,7 +43,7 @@ done
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
-docker build \
+DOCKER_BUILDKIT=1 docker build \
   -f ./docker/evmd.Dockerfile \
   --build-arg COMMIT_SHA="$COMMIT_SHA" \
   -t "$TAG" \

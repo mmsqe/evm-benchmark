@@ -1,19 +1,24 @@
+# syntax=docker/dockerfile:1.7
 FROM golang:1.25-alpine AS evmd-builder
-
-ARG COMMIT_SHA=main
 
 WORKDIR /src
 RUN apk add --no-cache curl make git libc-dev bash build-base linux-headers eudev-dev
 
-RUN git clone "https://github.com/cosmos/evm" /src/app \
+ARG COMMIT_SHA=main
+RUN git clone --filter=blob:none --no-checkout "https://github.com/cosmos/evm" /src/app \
   && cd /src/app \
-  && git checkout "$COMMIT_SHA"
+  && git fetch --depth=1 origin "$COMMIT_SHA" \
+  && git checkout FETCH_HEAD
 
 WORKDIR /src/app/evmd
-RUN go mod tidy
+RUN --mount=type=cache,target=/go/pkg/mod \
+  --mount=type=cache,target=/root/.cache/go-build \
+  go mod download
 
 WORKDIR /src/app
-RUN make build
+RUN --mount=type=cache,target=/go/pkg/mod \
+  --mount=type=cache,target=/root/.cache/go-build \
+  make build
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates

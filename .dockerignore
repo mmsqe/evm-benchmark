@@ -1,0 +1,21 @@
+# VCS metadata
+.git
+.gitmodules
+
+# Editor/OS
+.vscode
+.idea
+.DS_Store
+
+# Build/test artifacts
+bin/
+build/
+dist/
+coverage/
+*.log
+
+# Local benchmark/runtime data
+data/
+outputs/
+.tmp/
+tmp/
