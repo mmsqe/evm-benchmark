@@ -9,13 +9,17 @@ import (
 )
 
 func StatelessEVMBenchmarkWorkflow(ctx workflow.Context, req messages.WorkflowRequest) (messages.WorkflowResponse, error) {
-	opts := workflow.ActivityOptions{
+	baseOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 2 * time.Hour,
 		RetryPolicy: &temporal.RetryPolicy{
 			MaximumAttempts: 1,
 		},
 	}
-	ctx = workflow.WithActivityOptions(ctx, opts)
+	ctx = workflow.WithActivityOptions(ctx, baseOpts)
+
+	generateTxOpts := baseOpts
+	generateTxOpts.HeartbeatTimeout = 90 * time.Second
+	generateTxCtx := workflow.WithActivityOptions(ctx, generateTxOpts)
 
 	var layoutNodes []messages.NodeTarget
 	if req.Spec.SkipGenerateLayout {
@@ -44,7 +48,7 @@ func StatelessEVMBenchmarkWorkflow(ctx workflow.Context, req messages.WorkflowRe
 	if req.Spec.PreGenerateTxs {
 		futures := make([]workflow.Future, 0, len(layoutNodes))
 		for _, n := range layoutNodes {
-			f := workflow.ExecuteActivity(ctx, "GenerateTxs", messages.GenerateTxsRequest{Spec: req.Spec, Target: n})
+			f := workflow.ExecuteActivity(generateTxCtx, "GenerateTxs", messages.GenerateTxsRequest{Spec: req.Spec, Target: n})
 			futures = append(futures, f)
 		}
 		for _, f := range futures {

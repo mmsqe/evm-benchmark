@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log"
+	"time"
 
 	"github.com/mmsqe/evm-benchmark/internal/activities"
 	"github.com/mmsqe/evm-benchmark/internal/config"
@@ -25,6 +26,11 @@ func main() {
 	c, err := client.Dial(client.Options{
 		HostPort:  cfg.Temporal.HostPort,
 		Namespace: cfg.Temporal.Namespace,
+		ConnectionOptions: client.ConnectionOptions{
+			DisableKeepAliveCheck:               true,
+			DisableKeepAlivePermitWithoutStream: true,
+			GetSystemInfoTimeout:                15 * time.Second,
+		},
 	})
 	if err != nil {
 		log.Fatalf("dial temporal: %v", err)

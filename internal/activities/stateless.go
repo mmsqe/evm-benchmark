@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 	tomlv2 "github.com/pelletier/go-toml/v2"
+	"go.temporal.io/sdk/activity"
 )
 
 type Activity struct{}
@@ -124,6 +126,16 @@ func (a *Activity) LoadLayout(ctx context.Context, req messages.LoadLayoutReques
 		return messages.LoadLayoutResponse{}, fmt.Errorf("existing node layout %s is empty", nodesPath)
 	}
 
+	for _, n := range nodes {
+		configPath := filepath.Join(n.Home, "config", "config.toml")
+		if _, err := os.Stat(configPath); err != nil {
+			continue
+		}
+		if err := patchConfigToml(n.Home, nodes, req.Spec); err != nil {
+			return messages.LoadLayoutResponse{}, fmt.Errorf("refresh node config for %s: %w", n.Home, err)
+		}
+	}
+
 	return messages.LoadLayoutResponse{Nodes: nodes}, nil
 }
 
@@ -185,7 +197,38 @@ func enrichGenesisPatchFromChainConfig(spec *messages.BenchmarkSpec) error {
 }
 
 func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequest) (int, error) {
-	txs, err := bench.GenerateSignedTxs(req.Spec, req.Target.GlobalSeq)
+	logger := activity.GetLogger(ctx)
+	gomaxprocs := runtime.GOMAXPROCS(0)
+	maxWorkers := max(1, gomaxprocs-bench.SigningHeadroomReserved)
+	logger.Info(
+		"generate txs signing parallelism",
+		"node", req.Target.GlobalSeq,
+		"worker_count", bench.SigningWorkerCount(req.Spec.NumAccounts),
+		"gomaxprocs", gomaxprocs,
+		"total_accounts", req.Spec.NumAccounts,
+		"headroom_reserved", bench.SigningHeadroomReserved,
+		"pre_cap_workers", maxWorkers,
+		"cap_workers", bench.SigningWorkerCap,
+	)
+	logger.Info("generate txs started", "node", req.Target.GlobalSeq, "accounts", req.Spec.NumAccounts, "txs_per_account", req.Spec.NumTxs)
+
+	lastHeartbeat := time.Now()
+	lastProgressLog := time.Now()
+	progressStep := req.Spec.NumAccounts / 20
+	if progressStep < 1 {
+		progressStep = 1
+	}
+	txs, err := bench.GenerateSignedTxsWithProgress(req.Spec, req.Target.GlobalSeq, func(done, total int) {
+		if done == total || done == 1 || time.Since(lastHeartbeat) >= 15*time.Second {
+			activity.RecordHeartbeat(ctx, map[string]int{"accounts_done": done, "accounts_total": total})
+			lastHeartbeat = time.Now()
+		}
+		if done == total || done == 1 || done%progressStep == 0 || time.Since(lastProgressLog) >= 5*time.Second {
+			percent := (done * 100) / total
+			logger.Info("generate txs progress", "node", req.Target.GlobalSeq, "accounts_done", done, "accounts_total", total, "percent", percent)
+			lastProgressLog = time.Now()
+		}
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -197,6 +240,7 @@ func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequ
 	if err := writeJSON(filepath.Join(txDir, fmt.Sprintf("%d.json", req.Target.GlobalSeq)), txs); err != nil {
 		return 0, err
 	}
+	logger.Info("generate txs completed", "node", req.Target.GlobalSeq, "total_txs", len(txs))
 	_ = ctx
 	return len(txs), nil
 }

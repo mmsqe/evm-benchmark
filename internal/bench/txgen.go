@@ -3,6 +3,7 @@ package bench
 import (
 	"fmt"
 	"math/big"
+	"runtime"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -11,7 +12,23 @@ import (
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 )
 
+const (
+	SigningHeadroomReserved = 2
+	SigningWorkerCap        = 8
+)
+
+func SigningWorkerCount(totalAccounts int) int {
+	if totalAccounts <= 0 {
+		return 0
+	}
+	return min(totalAccounts, min(SigningWorkerCap, max(1, runtime.GOMAXPROCS(0)-SigningHeadroomReserved)))
+}
+
 func GenerateSignedTxs(spec messages.BenchmarkSpec, globalSeq int) ([]string, error) {
+	return GenerateSignedTxsWithProgress(spec, globalSeq, nil)
+}
+
+func GenerateSignedTxsWithProgress(spec messages.BenchmarkSpec, globalSeq int, onAccountDone func(done, total int)) ([]string, error) {
 	chainID := big.NewInt(spec.EVMChainID)
 	gasPrice := big.NewInt(spec.GasPriceWei)
 
@@ -39,6 +56,9 @@ func GenerateSignedTxs(spec messages.BenchmarkSpec, globalSeq int) ([]string, er
 				return nil, fmt.Errorf("marshal tx: %w", err)
 			}
 			result = append(result, "0x"+common.Bytes2Hex(raw))
+		}
+		if onAccountDone != nil {
+			onAccountDone(accountIndex+1, spec.NumAccounts)
 		}
 	}
 
