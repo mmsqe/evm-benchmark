@@ -583,8 +583,39 @@ func doRun(
 	rpcURL string,
 	txs []string,
 ) (messages.NodeRunResult, error) {
+	logger := activity.GetLogger(ctx)
+
 	if err := bench.WaitForHeight(ctx, client, rpcURL, spec.MinReadyHeight, 2*time.Minute); err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("wait ready height: %w", err)
+	}
+
+	if len(txs) > 0 {
+		suggested, err := bench.SuggestedGasPrice(ctx, client, rpcURL)
+		if err != nil {
+			logger.Warn("dynamic gas price estimate failed", "node", target.GlobalSeq, "error", err, "fallback_gas_price_wei", spec.GasPriceWei)
+		} else {
+			// Apply 20% increase to reduce underpriced rejections under bursty load.
+			dynamic := (suggested * 12) / 10
+			if dynamic < suggested {
+				dynamic = suggested
+			}
+
+			effective := dynamic
+			if effective < spec.GasPriceWei {
+				effective = spec.GasPriceWei
+			}
+
+			if effective != spec.GasPriceWei {
+				spec.GasPriceWei = effective
+				regenerated, genErr := bench.GenerateSignedTxs(spec, target.GlobalSeq)
+				if genErr != nil {
+					return messages.NodeRunResult{}, fmt.Errorf("regenerate txs with dynamic gas price: %w", genErr)
+				}
+				txs = regenerated
+			}
+
+			logger.Info("using runtime gas price", "node", target.GlobalSeq, "suggested_gas_price_wei", suggested, "effective_gas_price_wei", spec.GasPriceWei)
+		}
 	}
 
 	bench.BroadcastRawTxs(ctx, client, rpcURL, txs, spec.BroadcastConcurrency)

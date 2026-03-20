@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 )
 
 type jsonRPCRequest struct {
@@ -69,6 +70,9 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 		concurrency = 1
 	}
 
+	const txpoolHighWatermark = int64(5000)
+	const txpoolBackoff = 100 * time.Millisecond
+
 	jobs := make(chan string)
 	var wg sync.WaitGroup
 	for i := 0; i < concurrency; i++ {
@@ -76,6 +80,19 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 		go func() {
 			defer wg.Done()
 			for raw := range jobs {
+				for {
+					pending, err := TxPoolPendingCount(ctx, client, rpcURL)
+					if err == nil && pending > txpoolHighWatermark {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(txpoolBackoff):
+						}
+						continue
+					}
+					break
+				}
+
 				var result string
 				_ = JSONRPCCall(ctx, client, rpcURL, "eth_sendRawTransaction", []string{raw}, &result)
 			}
@@ -99,6 +116,20 @@ func CurrentHeight(ctx context.Context, client *http.Client, rpcURL string) (int
 		return 0, fmt.Errorf("parse block height %q: %w", hexHeight, err)
 	}
 	return h, nil
+}
+
+func SuggestedGasPrice(ctx context.Context, client *http.Client, rpcURL string) (int64, error) {
+	var hexPrice string
+	if err := JSONRPCCall(ctx, client, rpcURL, "eth_gasPrice", []interface{}{}, &hexPrice); err != nil {
+		return 0, err
+	}
+
+	p, err := strconv.ParseInt(hexPrice, 0, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse gas price %q: %w", hexPrice, err)
+	}
+
+	return p, nil
 }
 
 type ethBlock struct {
