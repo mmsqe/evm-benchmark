@@ -12,8 +12,10 @@ import (
 )
 
 type blockPoint struct {
-	Txs int
-	At  time.Time
+	Height int64
+	Txs    int
+	At     time.Time
+	TPS    float64
 }
 
 func calculateTPS(window []blockPoint) float64 {
@@ -48,16 +50,18 @@ func parseBlockTimestamp(raw string) (int64, error) {
 	return 0, fmt.Errorf("invalid timestamp format: %q", raw)
 }
 
-func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpcURL string, startHeight, endHeight int64) ([]float64, error) {
+func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpcURL string, startHeight, endHeight int64, txsSent int) ([]blockPoint, int, error) {
 	const tpsWindow = 5
 	const blockReadRetries = 8
 	const blockReadRetryDelay = 300 * time.Millisecond
 	if endHeight < startHeight {
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	points := make([]blockPoint, 0, endHeight-startHeight+1)
 	tpsList := make([]float64, 0, endHeight-startHeight+1)
+	totalIncludedTxs := 0
+	nonEmptyBlocks := 0
 
 	for h := startHeight; h <= endHeight; h++ {
 		var point blockPoint
@@ -73,7 +77,7 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 				if tsErr != nil {
 					lastErr = fmt.Errorf("parse timestamp %q: %w", blk.Timestamp, tsErr)
 				} else {
-					point = blockPoint{Txs: len(blk.Transactions), At: time.Unix(tsRaw, 0)}
+					point = blockPoint{Height: h, Txs: len(blk.Transactions), At: time.Unix(tsRaw, 0)}
 					ok = true
 					break
 				}
@@ -82,7 +86,7 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 			if attempt < blockReadRetries {
 				select {
 				case <-ctx.Done():
-					return nil, ctx.Err()
+					return nil, 0, ctx.Err()
 				case <-time.After(blockReadRetryDelay):
 				}
 			}
@@ -100,17 +104,34 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 			windowStart = 0
 		}
 		tp := calculateTPS(points[windowStart:])
+		points[len(points)-1].TPS = tp
 		tpsList = append(tpsList, tp)
+		totalIncludedTxs += point.Txs
+		if point.Txs > 0 {
+			nonEmptyBlocks++
+		}
 
-		_, _ = fmt.Fprintf(out, "height=%d time=%s txs=%d tps=%.2f\n", h, point.At.UTC().Format(time.RFC3339Nano), point.Txs, tp)
+		if point.Txs > 0 {
+			_, _ = fmt.Fprintf(out, "height=%d time=%s txs=%d tps=%.2f\n", h, point.At.UTC().Format(time.RFC3339Nano), point.Txs, tp)
+		}
 	}
 
+	missingTxs := txsSent - totalIncludedTxs
+	if missingTxs < 0 {
+		missingTxs = 0
+	}
+	_, _ = fmt.Fprintf(out, "tx_summary sent=%d included=%d missing=%d non_empty_blocks=%d\n", txsSent, totalIncludedTxs, missingTxs, nonEmptyBlocks)
+
 	sort.Slice(tpsList, func(i, j int) bool { return tpsList[i] > tpsList[j] })
+	sort.Slice(points, func(i, j int) bool { return points[i].TPS > points[j].TPS })
 	top := 5
 	if len(tpsList) < top {
 		top = len(tpsList)
 	}
-	_, _ = fmt.Fprintf(out, "top 5 TPS: %v\n", tpsList[:top])
+	for i := 0; i < top; i++ {
+		entry := points[i]
+		_, _ = fmt.Fprintf(out, "top_tps rank=%d height=%d time=%s txs=%d tps=%.2f\n", i+1, entry.Height, entry.At.UTC().Format(time.RFC3339Nano), entry.Txs, entry.TPS)
+	}
 
-	return tpsList[:top], nil
+	return points[:top], totalIncludedTxs, nil
 }

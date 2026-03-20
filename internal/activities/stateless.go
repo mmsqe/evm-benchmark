@@ -600,6 +600,11 @@ func doRun(
 		return messages.NodeRunResult{}, fmt.Errorf("wait idle/halt: %w", err)
 	}
 
+	pendingTxpool := int64(-1)
+	if pending, pendingErr := bench.TxPoolPendingCount(ctx, client, rpcURL); pendingErr == nil {
+		pendingTxpool = pending
+	}
+
 	end, err := bench.CurrentHeight(ctx, client, rpcURL)
 	if err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("final height: %w", err)
@@ -612,9 +617,21 @@ func doRun(
 	}
 	defer statsFile.Close()
 
-	topTPS, err := bench.DumpBlockStats(ctx, statsFile, client, rpcURL, 2, end)
+	topTPSPoints, includedTxs, err := bench.DumpBlockStats(ctx, statsFile, client, rpcURL, 2, end, len(txs))
 	if err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("dump block stats: %w", err)
+	}
+
+	topTPS := make([]float64, 0, len(topTPSPoints))
+	topTPSDetails := make([]messages.TPSDetail, 0, len(topTPSPoints))
+	for _, p := range topTPSPoints {
+		topTPS = append(topTPS, p.TPS)
+		topTPSDetails = append(topTPSDetails, messages.TPSDetail{
+			Height: p.Height,
+			Time:   p.At.UTC().Format(time.RFC3339Nano),
+			Txs:    p.Txs,
+			TPS:    p.TPS,
+		})
 	}
 
 	if spec.OutDir != "" {
@@ -625,10 +642,13 @@ func doRun(
 	}
 
 	return messages.NodeRunResult{
-		GlobalSeq: target.GlobalSeq,
-		TxsSent:   len(txs),
-		TopTPS:    topTPS,
-		StatsFile: statsPath,
+		GlobalSeq:     target.GlobalSeq,
+		TxsSent:       len(txs),
+		IncludedTxs:   includedTxs,
+		PendingTxpool: pendingTxpool,
+		TopTPS:        topTPS,
+		TopTPSDetails: topTPSDetails,
+		StatsFile:     statsPath,
 	}, nil
 }
 

@@ -70,11 +70,14 @@ func DetectIdleOrHalt(ctx context.Context, client *http.Client, rpcURL string, i
 			lastProgressAt = time.Now()
 
 			idle := true
+			checked := 0
 			for i := int64(0); i < int64(idleBlocks); i++ {
 				target := h - i
 				if target <= 0 {
+					idle = false
 					break
 				}
+				checked++
 				blk, err := BlockByNumber(ctx, client, rpcURL, target)
 				if err != nil {
 					idle = false
@@ -86,9 +89,20 @@ func DetectIdleOrHalt(ctx context.Context, client *http.Client, rpcURL string, i
 				}
 			}
 			if idle {
+				pending, err := TxPoolPendingCount(ctx, client, rpcURL)
+				if err != nil {
+					fmt.Printf("[bench] idle confirmed at height=%d (txpool status failed: %v)\n", h, err)
+				} else {
+					fmt.Printf("[bench] idle confirmed at height=%d pending_txpool=%d\n", h, pending)
+				}
 				return nil
 			}
+
+			if checked < idleBlocks {
+				fmt.Printf("[bench] idle check deferred at height=%d: need %d blocks, only %d available\n", h, idleBlocks, checked)
+			}
 		} else if time.Since(lastProgressAt) >= haltAfter {
+			fmt.Printf("[bench] halt detected: no block progress for %s at height=%d\n", haltAfter, h)
 			return nil
 		}
 

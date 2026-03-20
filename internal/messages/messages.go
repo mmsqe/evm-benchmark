@@ -126,9 +126,19 @@ type PatchImageResponse struct {
 	TargetDest string
 }
 
+type TPSDetail struct {
+	Height int64
+	Time   string
+	Txs    int
+	TPS    float64
+}
+
 type NodeRunResult struct {
-	GlobalSeq int
-	TxsSent   int
-	TopTPS    []float64
-	StatsFile string
+	GlobalSeq     int
+	TxsSent       int
+	IncludedTxs   int
+	PendingTxpool int64
+	TopTPS        []float64
+	TopTPSDetails []TPSDetail
+	StatsFile     string
 }

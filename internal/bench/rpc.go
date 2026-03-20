@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 )
 
@@ -111,4 +112,27 @@ func BlockByNumber(ctx context.Context, client *http.Client, rpcURL string, heig
 		return ethBlock{}, err
 	}
 	return blk, nil
+}
+
+type txPoolStatus struct {
+	Pending string `json:"pending"`
+	Queued  string `json:"queued"`
+}
+
+func TxPoolPendingCount(ctx context.Context, client *http.Client, rpcURL string) (int64, error) {
+	var status txPoolStatus
+	if err := JSONRPCCall(ctx, client, rpcURL, "txpool_status", []interface{}{}, &status); err != nil {
+		return 0, err
+	}
+
+	pending, err := strconv.ParseInt(status.Pending, 0, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse txpool pending %q: %w", status.Pending, err)
+	}
+	queued, err := strconv.ParseInt(status.Queued, 0, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse txpool queued %q: %w", status.Queued, err)
+	}
+
+	return pending + queued, nil
 }

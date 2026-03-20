@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/mmsqe/evm-benchmark/internal/config"
@@ -86,8 +89,29 @@ func main() {
 
 	fmt.Println("workflow completed")
 	for _, r := range res.NodeResults {
-		fmt.Printf("node=%d txs=%d top_tps=%v stats=%s\n", r.GlobalSeq, r.TxsSent, r.TopTPS, r.StatsFile)
+		if err := printHeightTxLines(r.GlobalSeq, r.StatsFile); err != nil {
+			log.Printf("failed to print per-height tx stats for node=%d: %v", r.GlobalSeq, err)
+		}
+		fmt.Printf("node=%d sent=%d included=%d pending=%d top_tps=%v\n", r.GlobalSeq, r.TxsSent, r.IncludedTxs, r.PendingTxpool, r.TopTPS)
 	}
+}
+
+func printHeightTxLines(node int, statsPath string) error {
+	f, err := os.Open(statsPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		line := strings.TrimSpace(s.Text())
+		if strings.HasPrefix(line, "height=") {
+			fmt.Printf("node=%d %s\n", node, line)
+		}
+	}
+
+	return s.Err()
 }
 
 func isRetryableGetError(err error) bool {
