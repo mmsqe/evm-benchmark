@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil/bech32"
@@ -118,6 +119,12 @@ func (a *Activity) GenerateLayout(ctx context.Context, req messages.GenerateLayo
 
 func (a *Activity) LoadLayout(ctx context.Context, req messages.LoadLayoutRequest) (messages.LoadLayoutResponse, error) {
 	_ = ctx
+
+	if req.Spec.OutDir != "" {
+		if err := os.MkdirAll(req.Spec.OutDir, 0o755); err != nil {
+			return messages.LoadLayoutResponse{}, fmt.Errorf("create output dir: %w", err)
+		}
+	}
 
 	nodesPath := filepath.Join(req.Spec.DataDir, "nodes.json")
 	var nodes []messages.NodeTarget
@@ -518,8 +525,7 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 			}
 			defer func() {
 				if proc.Process != nil {
-					_ = proc.Process.Kill()
-					_, _ = proc.Process.Wait()
+					_ = terminateProcessGracefully(proc, 5*time.Second)
 				}
 			}()
 		}
@@ -751,6 +757,36 @@ func hasStartArgPrefix(startArgs []string, prefix string) bool {
 		}
 	}
 	return false
+}
+
+func terminateProcessGracefully(cmd *exec.Cmd, timeout time.Duration) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+
+	// Allow profilers and other shutdown hooks to flush by terminating first.
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		if _, killErr := cmd.Process.Wait(); killErr == nil {
+			return nil
+		}
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+		return err
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, waitErr := cmd.Process.Wait()
+		done <- waitErr
+	}()
+
+	select {
+	case waitErr := <-done:
+		return waitErr
+	case <-time.After(timeout):
+		_ = cmd.Process.Kill()
+		return <-done
+	}
 }
 
 func dumpDockerLogs(spec messages.BenchmarkSpec, target messages.NodeTarget, containerName, reason string) (string, error) {

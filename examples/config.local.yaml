@@ -7,8 +7,8 @@ start:
   workflow_id: evm-benchmark-local
 
 benchmark:
-  data_dir: /tmp/evm-benchmark-local/data
-  out_dir: /tmp/evm-benchmark-local/output
+  data_dir: /private/tmp/evm-benchmark-local/data/out
+  out_dir: /private/tmp/evm-benchmark-local/output
 
   # runtime mode
   runner_type: local
@@ -32,22 +32,25 @@ benchmark:
     log_level: info
     mempool:
       type: "app"
+      size: 50000
+    consensus:
+      timeout_commit: "20ms"
   app_patch:
     evm:
       mempool:
         "operate-exclusively": true
     json-rpc:
       api: eth,net,web3,txpool
-  genesis_patch: 
+  genesis_patch:
     consensus:
       params:
         block:
-          max_gas: "163000000"
+          max_gas: "363000000"
 
   # benchmark shape
   validators: 1
   fullnodes: 0
-  num_accounts: 800
+  num_accounts: 2000
   num_txs: 20
   num_idle: 20
   broadcast_concurrency: 32
