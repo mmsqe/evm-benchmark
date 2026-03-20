@@ -22,95 +22,41 @@ Temporal-based stateless EVM load testing in Go.
 - `config/chains.jsonnet`: local chain profiles used by `benchmark.chain_config`.
 - `examples/config.yaml`: runnable config sample.
 
-## Steps
+## Docker Mode (default)
 
-### 1. Prepare Patched Image
-
-Run this in `evm-benchmark`:
+Use `scripts/run-benchmark.sh` for the standard docker workflow.
 
 ```bash
 export CHAIN_CONFIG=evmd
 export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
 
-scripts/build-evmd-testground.sh --tag evmd-testground:latest
+# One command for stop(old runtime) + clean + prepare + temporal + worker + starter.
+scripts/run-benchmark.sh run
 
-# Optional: pin to a specific cosmos/evm commit SHA or ref
-# scripts/build-evmd-testground.sh --tag evmd-testground:latest --commit-sha <sha-or-ref>
+# Optional: pin a specific cosmos/evm ref during run.
+# scripts/run-benchmark.sh --commit-sha <sha-or-ref> run
 
-go run ./cmd/benchctl build-image \
-	--dockerfile ./docker/base.Dockerfile \
-	--context . \
-	--build-args BASE_IMAGE=evmd-testground:latest \
-	--tag evmd-benchmark-base:local
-
-rm -rf /tmp/data && go run ./cmd/benchctl gen \
-	--config ./examples/config.yaml \
-	--data-root /private/tmp/data \
-	--clean
-
-go run ./cmd/benchctl patchimage \
-	--config ./examples/config.yaml \
-	--from-image evmd-benchmark-base:local \
-	--to-image evmd-benchmark-patched:local \
-	--source-dir /private/tmp/data/out \
-	--dst /data
+# Stop benchmark runtime (workflows + worker + temporal + containers).
+# scripts/run-benchmark.sh stop
 ```
 
-### 2. Run Benchmark With Temporal
+Results are written to `benchmark.out_dir` in `examples/config.yaml`.
 
-1. Ensure `examples/config.yaml` points to the patched image:
+## Local Mode
 
-```yaml
-benchmark:
-	runner_type: docker
-	start_node: true
-	docker_image: "evmd-benchmark-patched:local"
-	docker_keep_containers: true
-	docker_volumes:
-		- /tmp/colima:/outputs
-	docker_env:
-		JOB_COMPLETION_INDEX: "0"
-	patch_image:
-		enabled: false
-	skip_generate_layout: true
-```
-
-`skip_generate_layout: true` tells the workflow to reuse `benchmark.data_dir/nodes.json`
-and existing node home folders. This avoids rerunning bootstrap and rewriting
-`config/genesis.json` on each `starter` run.
-
-When using pre-generated layout from `benchctl gen --data-root <root>`, set
-`benchmark.data_dir` to `<root>/out` so node homes resolve as
-`<data_dir>/validators/<seq>` and `<data_dir>/fullnodes/<seq>`.
-
-When startup fails (for example timeout waiting for `127.0.0.1:26657`), the
-runner now writes container logs to host files:
-
-- `<benchmark.out_dir>/node_<n>_startup-rpc.log`, or
-- `<benchmark.data_dir>/docker-logs/node_<n>_startup-rpc.log` if `out_dir` is empty.
-
-Set `docker_keep_containers: true` to keep failed containers for manual debug
-with `docker ps -a` and `docker logs`.
-
-2. Start Temporal server:
+Use local mode when you do not want Docker node runtime.
 
 ```bash
-temporal server start-dev --ip 127.0.0.1 --port 7233
+export CHAIN_CONFIG=evmd
+
+# One command for stop(old runtime) + clean + prepare + temporal + worker + starter.
+scripts/run-benchmark.sh --mode local run
+
+# Stop benchmark runtime (workflows + worker + temporal).
+# scripts/run-benchmark.sh --mode local stop
 ```
 
-3. Start worker:
-
-```bash
-go run ./cmd/worker -config ./examples/config.yaml
-```
-
-4. Start workflow:
-
-```bash
-go run ./cmd/starter -config ./examples/config.yaml
-```
-
-5. Check results in `benchmark.out_dir` (default `/tmp/evm-benchmark/output`).
+By default local mode uses `examples/config.local.yaml`.
 
 ### Chain Selection From jsonnet
 
@@ -133,42 +79,11 @@ When enabled, these values are sourced from jsonnet and applied automatically:
 - `denom` (`evm_denom`)
 - `evm_chain_id`
 
-### Build Notes
+## Notes
 
-`scripts/build-evmd-testground.sh` now compiles `evmd` inside Docker using
-`docker/evmd.Dockerfile`, so macOS host binary format mismatches are avoided.
-
-### `patchimage`
-
-The workflow can perform a patch step directly in Go.
-
-Docker mode:
-
-- build temp Dockerfile with `FROM <fromimage>` and `ADD ./out <dst>`
-- tag to `<toimage>`
-- use the patched image for docker node startup
-
-Local mode:
-
-- copy `patch_image.source_dir` into `patch_image.dest`
-- if `patch_image.dest` is empty (or `/data`), `benchmark.data_dir` is used
-- used to mimic the same prepared-layout flow without Docker
-
-Config fields:
-
-```yaml
-benchmark:
-	runner_type: docker # or local
-	start_node: true
-	docker_keep_containers: true         # optional; keep containers after failures
-	docker_volumes:
-		- /tmp/colima:/outputs             # optional extra mounts, same format as docker -v
-	docker_env:
-		JOB_COMPLETION_INDEX: "0"         # optional key/value env vars
-	patch_image:
-		enabled: true
-		from_image: your-base-image:tag   # docker-only; optional; defaults to docker_image
-		to_image: your-patched-image:tag  # docker-only; optional; defaults to <from>-patched
-		source_dir: /private/tmp/data/out # optional; defaults to <data_dir>/out or data_dir
-		dest: /data                       # docker default: /data; local default: data_dir
-```
+- `scripts/run-benchmark.sh build-evmd` compiles `evmd` in Docker via `docker/evmd.Dockerfile`.
+- `scripts/run-benchmark.sh run` first performs runtime cleanup, then prefixes logs as `[temporal]`, `[worker]`, and `[starter]`.
+- `scripts/run-benchmark.sh cleanup-workflows` terminates known benchmark workflow IDs (`evm-benchmark-sample`, `evm-benchmark-local`, and the configured `start.workflow_id`).
+- `scripts/run-benchmark.sh stop` performs runtime cleanup (terminate workflows, stop worker, stop Temporal, and remove `evm-benchmark-*` containers in docker mode).
+- With `skip_generate_layout: true`, workflow reuses existing `benchmark.data_dir/nodes.json` and node homes.
+- In docker mode startup failures, logs are written to `benchmark.out_dir/node_<n>_startup-rpc.log` (or `benchmark.data_dir/docker-logs/...` if `out_dir` is empty).

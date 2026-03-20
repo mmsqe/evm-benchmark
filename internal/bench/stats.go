@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -30,8 +31,27 @@ func calculateTPS(window []blockPoint) float64 {
 	return float64(txCount) / seconds
 }
 
+func parseBlockTimestamp(raw string) (int64, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, fmt.Errorf("empty timestamp")
+	}
+
+	if ts, err := strconv.ParseInt(trimmed, 0, 64); err == nil {
+		return ts, nil
+	}
+
+	if ts, err := strconv.ParseInt(trimmed, 16, 64); err == nil {
+		return ts, nil
+	}
+
+	return 0, fmt.Errorf("invalid timestamp format: %q", raw)
+}
+
 func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpcURL string, startHeight, endHeight int64) ([]float64, error) {
 	const tpsWindow = 5
+	const blockReadRetries = 8
+	const blockReadRetryDelay = 300 * time.Millisecond
 	if endHeight < startHeight {
 		return nil, nil
 	}
@@ -40,17 +60,39 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 	tpsList := make([]float64, 0, endHeight-startHeight+1)
 
 	for h := startHeight; h <= endHeight; h++ {
-		blk, err := BlockByNumber(ctx, client, rpcURL, h)
-		if err != nil {
-			return nil, fmt.Errorf("read block %d: %w", h, err)
+		var point blockPoint
+		ok := false
+		var lastErr error
+
+		for attempt := 1; attempt <= blockReadRetries; attempt++ {
+			blk, err := BlockByNumber(ctx, client, rpcURL, h)
+			if err != nil {
+				lastErr = fmt.Errorf("read block: %w", err)
+			} else {
+				tsRaw, tsErr := parseBlockTimestamp(blk.Timestamp)
+				if tsErr != nil {
+					lastErr = fmt.Errorf("parse timestamp %q: %w", blk.Timestamp, tsErr)
+				} else {
+					point = blockPoint{Txs: len(blk.Transactions), At: time.Unix(tsRaw, 0)}
+					ok = true
+					break
+				}
+			}
+
+			if attempt < blockReadRetries {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(blockReadRetryDelay):
+				}
+			}
 		}
 
-		tsRaw, err := strconv.ParseInt(blk.Timestamp[2:], 16, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse block timestamp %q: %w", blk.Timestamp, err)
+		if !ok {
+			_, _ = fmt.Fprintf(out, "height=%d skipped: %v\n", h, lastErr)
+			continue
 		}
 
-		point := blockPoint{Txs: len(blk.Transactions), At: time.Unix(tsRaw, 0)}
 		points = append(points, point)
 
 		windowStart := len(points) - tpsWindow
