@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -54,8 +55,90 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 	const tpsWindow = 5
 	const blockReadRetries = 8
 	const blockReadRetryDelay = 300 * time.Millisecond
+	const blockFetchConcurrency = 12
 	if endHeight < startHeight {
 		return nil, 0, nil
+	}
+
+	type fetchedBlock struct {
+		height int64
+		point  blockPoint
+		err    error
+	}
+
+	jobs := make(chan int64, blockFetchConcurrency)
+	results := make(chan fetchedBlock, int(endHeight-startHeight+1))
+
+	workerCount := blockFetchConcurrency
+	if total := int(endHeight - startHeight + 1); total < workerCount {
+		workerCount = total
+	}
+	if workerCount < 1 {
+		workerCount = 1
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for h := range jobs {
+				var point blockPoint
+				var lastErr error
+				ok := false
+
+				for attempt := 1; attempt <= blockReadRetries; attempt++ {
+					blk, err := BlockByNumber(ctx, client, rpcURL, h)
+					if err != nil {
+						lastErr = fmt.Errorf("read block: %w", err)
+					} else {
+						tsRaw, tsErr := parseBlockTimestamp(blk.Timestamp)
+						if tsErr != nil {
+							lastErr = fmt.Errorf("parse timestamp %q: %w", blk.Timestamp, tsErr)
+						} else {
+							point = blockPoint{Height: h, Txs: len(blk.Transactions), At: time.Unix(tsRaw, 0)}
+							ok = true
+							break
+						}
+					}
+
+					if attempt < blockReadRetries {
+						select {
+						case <-ctx.Done():
+							results <- fetchedBlock{height: h, err: ctx.Err()}
+							goto nextJob
+						case <-time.After(blockReadRetryDelay):
+						}
+					}
+				}
+
+				if !ok {
+					results <- fetchedBlock{height: h, err: lastErr}
+				} else {
+					results <- fetchedBlock{height: h, point: point}
+				}
+
+			nextJob:
+			}
+		}()
+	}
+
+	for h := startHeight; h <= endHeight; h++ {
+		jobs <- h
+	}
+	close(jobs)
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	byHeight := make(map[int64]fetchedBlock, endHeight-startHeight+1)
+	for r := range results {
+		if r.err == ctx.Err() && ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
+		byHeight[r.height] = r
 	}
 
 	points := make([]blockPoint, 0, endHeight-startHeight+1)
@@ -64,38 +147,16 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 	nonEmptyBlocks := 0
 
 	for h := startHeight; h <= endHeight; h++ {
-		var point blockPoint
-		ok := false
-		var lastErr error
-
-		for attempt := 1; attempt <= blockReadRetries; attempt++ {
-			blk, err := BlockByNumber(ctx, client, rpcURL, h)
-			if err != nil {
-				lastErr = fmt.Errorf("read block: %w", err)
+		fetched, ok := byHeight[h]
+		if !ok || fetched.err != nil {
+			if ok {
+				_, _ = fmt.Fprintf(out, "height=%d skipped: %v\n", h, fetched.err)
 			} else {
-				tsRaw, tsErr := parseBlockTimestamp(blk.Timestamp)
-				if tsErr != nil {
-					lastErr = fmt.Errorf("parse timestamp %q: %w", blk.Timestamp, tsErr)
-				} else {
-					point = blockPoint{Height: h, Txs: len(blk.Transactions), At: time.Unix(tsRaw, 0)}
-					ok = true
-					break
-				}
+				_, _ = fmt.Fprintf(out, "height=%d skipped: missing fetch result\n", h)
 			}
-
-			if attempt < blockReadRetries {
-				select {
-				case <-ctx.Done():
-					return nil, 0, ctx.Err()
-				case <-time.After(blockReadRetryDelay):
-				}
-			}
-		}
-
-		if !ok {
-			_, _ = fmt.Fprintf(out, "height=%d skipped: %v\n", h, lastErr)
 			continue
 		}
+		point := fetched.point
 
 		points = append(points, point)
 
