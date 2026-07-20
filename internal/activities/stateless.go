@@ -47,7 +47,14 @@ const (
 
 func (a *Activity) GenerateLayout(ctx context.Context, req messages.GenerateLayoutRequest) (messages.GenerateLayoutResponse, error) {
 	spec := req.Spec
-	if err := enrichGenesisPatchFromChainConfig(&spec); err != nil {
+	chain, err := resolveRuntime(spec)
+	if err != nil {
+		return messages.GenerateLayoutResponse{}, err
+	}
+	if err := chain.Validate(spec); err != nil {
+		return messages.GenerateLayoutResponse{}, err
+	}
+	if err := chain.EnrichSpec(&spec); err != nil {
 		return messages.GenerateLayoutResponse{}, err
 	}
 	nodes := make([]messages.NodeTarget, 0, spec.Validators+spec.Fullnodes)
@@ -67,10 +74,9 @@ func (a *Activity) GenerateLayout(ctx context.Context, req messages.GenerateLayo
 		hostRPCPort := spec.RPCPort + globalSeq
 		hostEVMRPCPort := spec.EVMRPCPort + globalSeq
 
-		rpcURL := fmt.Sprintf("http://127.0.0.1:%d", spec.EVMRPCPort)
+		rpcURL := fmt.Sprintf("http://127.0.0.1:%d", chain.EVMRPCPort(spec, globalSeq))
 		tmURL := fmt.Sprintf("http://127.0.0.1:%d", spec.RPCPort)
 		if spec.RunnerType == "docker" {
-			rpcURL = fmt.Sprintf("http://127.0.0.1:%d", hostEVMRPCPort)
 			tmURL = fmt.Sprintf("http://127.0.0.1:%d", hostRPCPort)
 		}
 		return messages.NodeTarget{
@@ -102,7 +108,7 @@ func (a *Activity) GenerateLayout(ctx context.Context, req messages.GenerateLayo
 		nodes = append(nodes, n)
 	}
 
-	if err := bootstrapNodesAndGenesis(ctx, spec, nodes); err != nil {
+	if err := chain.Bootstrap(ctx, spec, nodes); err != nil {
 		return messages.GenerateLayoutResponse{}, err
 	}
 
@@ -221,11 +227,34 @@ func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequ
 	)
 	logger.Info("generate txs started", "node", req.Target.GlobalSeq, "accounts", req.Spec.NumAccounts, "txs_per_account", req.Spec.NumTxs)
 
+	// Each activity receives the raw spec from the workflow, so family defaults
+	// (fee token, tx type) must be applied here too — GenerateLayout enriched
+	// only its own copy.
+	chain, err := resolveRuntime(req.Spec)
+	if err != nil {
+		return 0, err
+	}
+	if err := chain.EnrichSpec(&req.Spec); err != nil {
+		return 0, err
+	}
+
 	txDir := filepath.Join(req.Spec.DataDir, "txs")
 	if err := os.MkdirAll(txDir, 0o755); err != nil {
 		return 0, fmt.Errorf("create tx dir: %w", err)
 	}
 	txPath := filepath.Join(txDir, fmt.Sprintf("%d.json", req.Target.GlobalSeq))
+
+	// A family may generate its own transactions (Tempo's native 0x76
+	// envelope); otherwise fall through to the shared legacy signer.
+	if producer, ok := chain.(txProducer); ok && producer.ProducesTxs(req.Spec) {
+		count, prodErr := producer.ProduceTxs(ctx, req.Spec, req.Target, txPath)
+		if prodErr != nil {
+			return 0, prodErr
+		}
+		logger.Info("generate txs completed via chain producer", "node", req.Target.GlobalSeq, "total_txs", count)
+		return count, nil
+	}
+
 	txFile, err := os.Create(txPath)
 	if err != nil {
 		return 0, fmt.Errorf("create tx file: %w", err)
@@ -391,6 +420,14 @@ func (a *Activity) PatchImage(ctx context.Context, req messages.PatchImageReques
 
 func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (messages.NodeRunResult, error) {
 	spec := req.Spec
+	chain, err := resolveRuntime(spec)
+	if err != nil {
+		return messages.NodeRunResult{}, err
+	}
+	// See GenerateTxs: activities get the un-enriched spec from the workflow.
+	if err := chain.EnrichSpec(&spec); err != nil {
+		return messages.NodeRunResult{}, err
+	}
 	broadcastConcurrency := spec.BroadcastConcurrency
 	if broadcastConcurrency < 1 {
 		broadcastConcurrency = 1
@@ -430,10 +467,13 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 			usePatchedImageLayout = true
 		}
 	}
+	if err := chain.Validate(spec); err != nil {
+		return messages.NodeRunResult{}, err
+	}
+	if err := chain.PreStartCheck(spec, target); err != nil {
+		return messages.NodeRunResult{}, err
+	}
 	if spec.StartNode {
-		if spec.Binary == "" {
-			return messages.NodeRunResult{}, fmt.Errorf("benchmark.binary is required when start_node=true")
-		}
 
 		if spec.RunnerType == "docker" {
 			if spec.DockerCreateNetwork {
@@ -507,13 +547,17 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 				}()
 			}
 		} else {
-			args := []string{"start", "--home", target.Home}
-			if strings.TrimSpace(spec.ChainID) != "" {
-				args = append(args, "--chain-id", spec.ChainID)
+			argv, dir := chain.LocalStartCommand(spec, target)
+			if len(argv) == 0 {
+				return messages.NodeRunResult{}, fmt.Errorf("chain family %s has no local start command", chain.Name())
 			}
-			args = append(args, spec.StartArgs...)
-			proc = exec.CommandContext(ctx, spec.Binary, args...)
-			logFile, err := os.OpenFile(filepath.Join(target.Home, "node.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+			logHome := target.Home
+			if dir != "" {
+				logHome = dir
+			}
+			proc = exec.CommandContext(ctx, argv[0], argv[1:]...)
+			proc.Dir = dir
+			logFile, err := os.OpenFile(filepath.Join(logHome, "node.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 			if err != nil {
 				return messages.NodeRunResult{}, fmt.Errorf("open node log file: %w", err)
 			}
@@ -533,19 +577,20 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 
 	host := "127.0.0.1"
 	rpcPort := spec.RPCPort
-	evmPort := spec.EVMRPCPort
 	if spec.RunnerType == "docker" {
 		rpcPort = target.HostRPCPort
-		evmPort = target.HostEVMRPCPort
 	}
+	evmPort := chain.EVMRPCPort(spec, target.GlobalSeq)
 
-	if err := bench.WaitForPort(ctx, host, rpcPort, 2*time.Minute); err != nil {
-		if spec.RunnerType == "docker" {
-			if logPath, dumpErr := dumpDockerLogs(spec, target, containerName, "startup-rpc"); dumpErr == nil {
-				return messages.NodeRunResult{}, fmt.Errorf("wait tendermint rpc: %w (docker logs: %s)", err, logPath)
+	if chain.HasConsensusRPC() {
+		if err := bench.WaitForPort(ctx, host, rpcPort, 2*time.Minute); err != nil {
+			if spec.RunnerType == "docker" {
+				if logPath, dumpErr := dumpDockerLogs(spec, target, containerName, "startup-rpc"); dumpErr == nil {
+					return messages.NodeRunResult{}, fmt.Errorf("wait consensus rpc: %w (docker logs: %s)", err, logPath)
+				}
 			}
+			return messages.NodeRunResult{}, fmt.Errorf("wait consensus rpc: %w", err)
 		}
-		return messages.NodeRunResult{}, fmt.Errorf("wait tendermint rpc: %w", err)
 	}
 	if err := bench.WaitForPort(ctx, host, evmPort, 2*time.Minute); err != nil {
 		if spec.RunnerType == "docker" {
@@ -606,12 +651,34 @@ func doRun(
 			}
 
 			if effective != spec.GasPriceWei {
-				spec.GasPriceWei = effective
-				regenerated, genErr := bench.GenerateSignedTxs(spec, target.GlobalSeq)
-				if genErr != nil {
-					return messages.NodeRunResult{}, fmt.Errorf("regenerate txs with dynamic gas price: %w", genErr)
+				// Transactions produced by a chain-specific generator cannot be
+				// re-signed here: the legacy signer would silently replace a
+				// native envelope with a legacy one. Those transactions carry an
+				// EIP-1559 style max fee instead, which already absorbs base-fee
+				// movement, so only the built-in signer needs regenerating.
+				if externallyGenerated(spec) {
+					logger.Info(
+						"skipping gas-price regeneration for externally generated txs",
+						"node", target.GlobalSeq,
+						"suggested_gas_price_wei", suggested,
+						"signed_max_fee_per_gas", spec.GasPriceWei,
+					)
+					if effective > spec.GasPriceWei {
+						logger.Warn(
+							"suggested gas price exceeds the max fee these txs were signed with; they may be rejected as underpriced",
+							"node", target.GlobalSeq,
+							"suggested_gas_price_wei", effective,
+							"signed_max_fee_per_gas", spec.GasPriceWei,
+						)
+					}
+				} else {
+					spec.GasPriceWei = effective
+					regenerated, genErr := bench.GenerateSignedTxs(spec, target.GlobalSeq)
+					if genErr != nil {
+						return messages.NodeRunResult{}, fmt.Errorf("regenerate txs with dynamic gas price: %w", genErr)
+					}
+					txs = regenerated
 				}
-				txs = regenerated
 			}
 
 			logger.Info("using runtime gas price", "node", target.GlobalSeq, "suggested_gas_price_wei", suggested, "effective_gas_price_wei", spec.GasPriceWei)
@@ -1333,4 +1400,21 @@ func ethAddressToBech32(addr common.Address, prefix string) (string, error) {
 		return "", fmt.Errorf("convert bits: %w", err)
 	}
 	return bech32.Encode(prefix, fiveBit)
+}
+
+// externallyGenerated reports whether this run's transactions came from a
+// chain-specific generator rather than the built-in signer, in which case they
+// must not be re-signed by internal/bench.
+func externallyGenerated(spec messages.BenchmarkSpec) bool {
+	chain, err := resolveRuntime(spec)
+	if err != nil {
+		return false
+	}
+	producer, ok := chain.(txProducer)
+	if !ok {
+		return false
+	}
+	// Ask the producer itself whether it is configured, so a future family
+	// implementing txProducer is not silently re-signed by the legacy signer.
+	return producer.ProducesTxs(spec)
 }

@@ -70,6 +70,13 @@ func load(path string, runtimeValidation bool) (AppConfig, error) {
 
 func applyChainConfig(configPath string, cfg *AppConfig) error {
 	spec := &cfg.Benchmark
+	// Chain profiles (config/chains.jsonnet) are cosmos-sdk-shaped. Non-cosmos
+	// families describe their network in the spec itself, so an inherited
+	// CHAIN_CONFIG from the environment must not be applied to them.
+	if spec.ChainFamily != "" && spec.ChainFamily != "cosmos" {
+		spec.ChainConfig = ""
+		return nil
+	}
 	if envChain := os.Getenv("CHAIN_CONFIG"); envChain != "" {
 		spec.ChainConfig = envChain
 	}
@@ -250,8 +257,14 @@ func applyDefaults(cfg *AppConfig) {
 	if spec.ChainHaltIntervalSeconds == 0 {
 		spec.ChainHaltIntervalSeconds = 120
 	}
+	// Default per family: Tempo rejects native value transfers outright, so
+	// the cosmos default would be an immediate error there.
 	if spec.TxType == "" {
-		spec.TxType = messages.SimpleTransferTx
+		if spec.ChainFamily == "tempo" {
+			spec.TxType = messages.ERC20TransferTx
+		} else {
+			spec.TxType = messages.SimpleTransferTx
+		}
 	}
 	if spec.BatchSize == 0 {
 		spec.BatchSize = 1
@@ -268,7 +281,11 @@ func applyDefaults(cfg *AppConfig) {
 	if spec.ERC20TransferGas == 0 {
 		spec.ERC20TransferGas = 51_630
 	}
-	if spec.ERC20ContractAddress == "" {
+	// This address is the cosmos test token. Other chain families supply their
+	// own default from their runtime (Tempo uses its genesis TIP-20 fee token),
+	// so leave the field empty for them rather than pointing every transaction
+	// at a contract that does not exist on that chain.
+	if spec.ERC20ContractAddress == "" && (spec.ChainFamily == "" || spec.ChainFamily == "cosmos") {
 		spec.ERC20ContractAddress = "0x1000000000000000000000000000000000000000"
 	}
 	if spec.RPCPort == 0 {
