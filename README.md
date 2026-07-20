@@ -42,6 +42,133 @@ scripts/run-benchmark.sh run
 
 Results are written to `benchmark.out_dir` in `examples/config.yaml`.
 
+## Tempo Mode
+
+Benchmarks a [Tempo](https://github.com/tempoxyz/tempo) devnet (commonware
+consensus) with the same generator and stats used for the cosmos chains, so
+results are comparable.
+
+### Prerequisites
+
+1. `tempo` and `tempo-xtask` binaries — build them in the tempo repo:
+   `cargo build --bin tempo --bin tempo-xtask` (add `--release` for real runs).
+2. tempo-py's `tempo-devnet`, which generates the devnet (genesis, keys,
+   per-node `run.sh`). Its venv python is also what signs native transactions.
+3. The `temporal` CLI (the run script starts a dev server itself).
+
+### Configure
+
+Point `examples/config.tempo.yaml` at your toolchain — these paths are the only
+machine-specific settings:
+
+```yaml
+binary:             /path/to/tempo/target/release/tempo
+tempo_bin:          /path/to/tempo/target/release/tempo
+tempo_xtask_bin:    /path/to/tempo/target/release/tempo-xtask
+tempo_devnet_bin:   /path/to/tempo-py/.venv/bin/tempo-devnet
+tempo_tx_generator: /path/to/tempo-py/.venv/bin/python
+```
+
+The docker profile (`examples/config.tempo.docker.yaml`) needs the same, except
+`tempo_bin` is the in-image command name.
+
+### Run
+
+```bash
+scripts/run-benchmark.sh --mode tempo run
+```
+
+That stops any previous runtime, generates the devnet, pre-signs the
+transactions, starts the node, sends the load, and writes
+`/tmp/tempo-benchmark/output/node_0_block_stats.log`. Stop everything with
+`scripts/run-benchmark.sh --mode tempo stop`.
+
+The line that matters is `tx_summary`: if `included` is far below `sent`, the
+run measured rejection, not throughput.
+
+### Scale the load
+
+The default (500 accounts x 40 txs) drains in about a second, which is too fast
+to measure. For a real number use a load large enough to span many blocks:
+
+```bash
+sed -e 's/num_accounts: 500/num_accounts: 2000/' -e 's/num_txs: 40/num_txs: 100/' \
+  examples/config.tempo.yaml > /tmp/config.tempo.large.yaml
+scripts/run-benchmark.sh --mode tempo --config /tmp/config.tempo.large.yaml run
+```
+
+### Transaction shape
+
+By default the load is Tempo's **native `0x76`** envelope, signed by
+`scripts/gen_tempo_txs.py` through tempo-py's canonical encoder.
+`tempo_tx_shape` selects the workload (`self`, `hot`, `noop`, `batch`, `fresh`,
+`multitoken`, `approve`, `memo`, `approve_transfer`) — see the `plan.md` shapes
+table for what each touches and its gas floor. Heavier shapes need a higher
+`erc20_transfer_gas`, which is enforced up front.
+
+Comment out `tempo_tx_generator` to fall back to legacy/London EVM transactions
+(Tempo's compatibility path) — but only for a single validator: the built-in
+signer derives node *N*'s accounts from an HD branch `tempo-xtask` does not
+fund, so multi-node legacy load is rejected.
+
+Note that Tempo rejects native value transfers (so `tx_type` is
+`erc20-transfer`), charges a ~271k intrinsic gas floor, and has no CometBFT RPC
+or `chains.jsonnet` profile — the network is described by the `tempo_*` fields.
+
+### Docker mode
+
+Runs the validators as containers. The devnet is generated with
+`tempo-devnet init --gen-compose-file` and started with `docker compose up -d`,
+so compose owns the lifecycle:
+
+```bash
+docker pull ghcr.io/tempoxyz/tempo:latest
+scripts/run-benchmark.sh --mode tempo-docker run
+scripts/run-benchmark.sh --mode tempo-docker stop   # tears the cluster down
+```
+
+Constraints, all enforced with clear errors:
+
+- `start_node: false` — compose starts the nodes, not the benchmark;
+- `validators: >= 2` — `tempo-devnet` derives each container's trusted peers
+  from the *other* validators, so a single-node docker devnet gets an empty
+  `--trusted-peers` and will not boot;
+- `tempo_bin` is the in-image command name (`tempo`), while `tempo_xtask_bin`
+  and the tx generator still run on the host.
+
+Each node draws a disjoint slice of the funded account branch, so genesis funds
+`validators * num_accounts + 1` accounts (index 0 is the validator key). Note that this measures the tempo build inside the
+image, which is usually not the binary you built locally.
+
+### Troubleshooting
+
+Verify the accounts the generator signs from can actually pay, against the RPC
+you are about to benchmark (node0 serves `base_port + 4`):
+
+```bash
+go run ./cmd/checkfunding -rpc http://127.0.0.1:8004 -chain-id 1337
+```
+
+In local mode, a node left over from an earlier run serves its own stale
+genesis; bootstrap refuses to start in that case rather than silently
+benchmarking the wrong chain. Run the `stop` command above if you hit it.
+Docker mode instead tears its own compose project down before recreating it,
+so it is idempotent.
+
+### Tests
+
+```bash
+TEMPO_DEVNET_BIN=/path/to/tempo-py/.venv/bin/tempo-devnet \
+TEMPO_BIN=/path/to/tempo \
+TEMPO_XTASK_BIN=/path/to/tempo-xtask \
+go test ./internal/activities -run Tempo
+```
+
+The devnet-bootstrapping test skips unless those three are set; the rest of the
+suite runs unconditionally.
+
+See `plan.md` for measured Tempo characteristics and results.
+
 ## Local Mode
 
 Use local mode when you do not want Docker node runtime.

@@ -20,7 +20,12 @@ Commands:
   run        Stop runtime + prepare + start temporal + run worker/starter
 
 Options:
-  --mode <docker|local>   Runner mode (default: docker)
+  --mode <docker|local|tempo|tempo-docker>
+                          Runner mode (default: docker). "tempo" benchmarks a
+                          Tempo devnet locally; "tempo-docker" runs the Tempo
+                          validators as containers via docker compose (needs
+                          tempo-devnet/tempo-xtask on the host and a tempo
+                          image; see plan.md).
   --config <path>         Config file path
   --data-root <path>      Root path used by benchctl gen
   --chain-config <name>   CHAIN_CONFIG value (default: evmd)
@@ -38,6 +43,9 @@ Examples:
   scripts/run-benchmark.sh --mode local prepare
   scripts/run-benchmark.sh --mode local worker
   scripts/run-benchmark.sh --mode local starter
+
+  scripts/run-benchmark.sh --mode tempo run
+  scripts/run-benchmark.sh --mode tempo-docker run
 USAGE
 }
 
@@ -107,30 +115,37 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 case "$MODE" in
-  docker|local) ;;
+  docker|local|tempo|tempo-docker) ;;
   *)
-    echo "Invalid --mode: $MODE (expected docker or local)"
+    echo "Invalid --mode: $MODE (expected docker, local, tempo or tempo-docker)"
     exit 1
     ;;
 esac
 
 if [[ -z "$CONFIG" ]]; then
-  if [[ "$MODE" == "docker" ]]; then
-    CONFIG="./examples/config.yaml"
-  else
-    CONFIG="./examples/config.local.yaml"
-  fi
+  case "$MODE" in
+    docker) CONFIG="./examples/config.yaml" ;;
+    tempo)  CONFIG="./examples/config.tempo.yaml" ;;
+    tempo-docker) CONFIG="./examples/config.tempo.docker.yaml" ;;
+    *)      CONFIG="./examples/config.local.yaml" ;;
+  esac
 fi
 
 if [[ -z "$DATA_ROOT" ]]; then
-  if [[ "$MODE" == "docker" ]]; then
-    DATA_ROOT="/private/tmp/data"
-  else
-    DATA_ROOT="/private/tmp/evm-benchmark-local/data"
-  fi
+  case "$MODE" in
+    docker) DATA_ROOT="/private/tmp/data" ;;
+    tempo)  DATA_ROOT="/tmp/tempo-benchmark/data" ;;
+    tempo-docker) DATA_ROOT="/tmp/tempo-benchmark-docker/data" ;;
+    *)      DATA_ROOT="/private/tmp/evm-benchmark-local/data" ;;
+  esac
 fi
 
-export CHAIN_CONFIG
+# Chain profiles are cosmos-only; exporting one would override the tempo config.
+if [[ "$MODE" == tempo* ]]; then
+  unset CHAIN_CONFIG
+else
+  export CHAIN_CONFIG
+fi
 
 RUN_WORKER_PID=""
 RUN_TEMPORAL_PID=""
@@ -207,6 +222,10 @@ wait_for_tcp_port() {
 run_clean() {
   log_step "clean: removing temporary benchmark directories"
   rm -rf /private/tmp/data /private/tmp/evm-benchmark-local /private/tmp/evm-benchmark
+  case "$MODE" in
+    tempo) rm -rf /tmp/tempo-benchmark ;;
+    tempo-docker) rm -rf /tmp/tempo-benchmark-docker ;;
+  esac
 }
 
 run_gen() {
@@ -272,10 +291,29 @@ stop_runtime() {
   terminate_matching_processes "/exe/worker -config" 8
   terminate_matching_processes "temporal server start-dev" 5
 
-  if [[ "$MODE" == "docker" ]]; then
-    cleanup_benchmark_containers
-  fi
+  case "$MODE" in
+    docker) cleanup_benchmark_containers ;;
+    # Tempo nodes are launched from the generated per-node run.sh wrapper.
+    tempo) terminate_matching_processes "tempo-benchmark/data/devnet" 8 ;;
+    tempo-docker) cleanup_tempo_compose ;;
+  esac
   log_step "stop: runtime cleanup complete"
+}
+
+# Tear down the compose-managed Tempo devnet by project label. Not by
+# `compose -f`: the compose file lives under the run's data_dir, which differs
+# between `benchctl gen` (data/out/devnet) and `run` (data/devnet), and
+# `compose -f <missing>` errors out instead of resolving the project by name.
+cleanup_tempo_compose() {
+  if ! command -v docker >/dev/null 2>&1; then
+    return
+  fi
+  local project="${TEMPO_COMPOSE_PROJECT:-evm-benchmark-tempo}"
+  local ids
+  ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project" || true)"
+  if [[ -n "$ids" ]]; then
+    docker rm -f $ids >/dev/null 2>&1 || true
+  fi
 }
 
 cleanup_benchmark_containers() {
@@ -314,11 +352,7 @@ run_all() {
   stop_runtime
 
   log_step "run: step 2/5 prepare benchmark artifacts"
-  if [[ "$MODE" == "docker" ]]; then
-    run_prepare_docker
-  else
-    run_prepare_local
-  fi
+  run_prepare
   log_step "run: prepare completed"
 
   log_step "run: step 3/5 start temporal dev server"
@@ -384,6 +418,14 @@ run_prepare_docker() {
   log_step "prepare(docker): completed"
 }
 
+run_prepare() {
+  if [[ "$MODE" == "docker" ]]; then
+    run_prepare_docker
+  else
+    run_prepare_local
+  fi
+}
+
 run_prepare_local() {
   log_step "prepare(local): clean temporary data"
   run_clean
@@ -407,11 +449,7 @@ case "$COMMAND" in
     run_build_evmd
     ;;
   prepare)
-    if [[ "$MODE" == "docker" ]]; then
-      run_prepare_docker
-    else
-      run_prepare_local
-    fi
+    run_prepare
     ;;
   temporal)
     temporal server start-dev --ip 127.0.0.1 --port 7233
