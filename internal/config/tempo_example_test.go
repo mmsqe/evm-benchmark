@@ -15,8 +15,8 @@ func TestTempoExampleConfigParses(t *testing.T) {
 	if b.ChainFamily != "tempo" {
 		t.Errorf("chain_family = %q", b.ChainFamily)
 	}
-	if b.TempoDevnetBin == "" || b.TempoBin == "" || b.TempoXtaskBin == "" {
-		t.Errorf("tempo binaries not parsed: %+v", b.TempoDevnetBin)
+	if b.TempoBin == "" || b.TempoXtaskBin == "" {
+		t.Errorf("tempo binaries not parsed: bin=%q xtask=%q", b.TempoBin, b.TempoXtaskBin)
 	}
 	if b.TempoBasePort != 8000 || b.TempoGasLimit != 3000000000 {
 		t.Errorf("tempo ports/gas not parsed: port=%d gas=%d", b.TempoBasePort, b.TempoGasLimit)
@@ -40,7 +40,7 @@ func TestTempoDockerExampleConfigParses(t *testing.T) {
 	if b.StartNode {
 		t.Error("start_node must be false in docker mode")
 	}
-	// tempo-devnet derives trusted peers from the OTHER validators.
+	// The docker launcher derives trusted peers from the OTHER validators.
 	if b.Validators < 2 {
 		t.Errorf("docker needs >=2 validators, got %d", b.Validators)
 	}

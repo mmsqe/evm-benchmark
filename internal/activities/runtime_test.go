@@ -90,7 +90,7 @@ func TestTempoDockerValidation(t *testing.T) {
 		t.Error("expected start_node=true to be rejected in docker mode")
 	}
 
-	// tempo-devnet derives trusted peers from the OTHER validators, so a
+	// The docker launcher derives trusted peers from the OTHER validators, so a
 	// single-node docker devnet boots with an empty --trusted-peers.
 	single := base
 	single.Validators = 1
@@ -164,7 +164,7 @@ func TestTempoComposeProjectIsStableAndScoped(t *testing.T) {
 }
 
 func TestTempoDockerPortsMatchComposePublishing(t *testing.T) {
-	// tempo-devnet publishes each node's JSON-RPC on base_port+4, and node
+	// The devnet publishes each node's JSON-RPC on base_port+4, and node
 	// blocks are 6 ports apart; the benchmark must target the same ports.
 	spec := messages.BenchmarkSpec{TempoBasePort: 8000}
 	for seq, want := range map[int]int{0: 8004, 1: 8010, 2: 8016, 3: 8022} {

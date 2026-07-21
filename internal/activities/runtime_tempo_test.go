@@ -12,17 +12,17 @@ import (
 	"go.temporal.io/sdk/testsuite"
 )
 
-// TestTempoBootstrap exercises the real `tempo-devnet init` path. It is skipped
-// unless the toolchain is available:
+// TestTempoBootstrap exercises the real devnet-generation path (which shells
+// out to `tempo-xtask generate-localnet`). It is skipped unless the toolchain
+// is available:
 //
-//	TEMPO_DEVNET_BIN=.../tempo-devnet TEMPO_BIN=.../tempo TEMPO_XTASK_BIN=.../tempo-xtask \
+//	TEMPO_BIN=.../tempo TEMPO_XTASK_BIN=.../tempo-xtask \
 //	  go test ./internal/activities -run TempoBootstrap
 func TestTempoBootstrap(t *testing.T) {
-	devnetBin := os.Getenv("TEMPO_DEVNET_BIN")
 	tempoBin := os.Getenv("TEMPO_BIN")
 	xtaskBin := os.Getenv("TEMPO_XTASK_BIN")
-	if devnetBin == "" || tempoBin == "" || xtaskBin == "" {
-		t.Skip("set TEMPO_DEVNET_BIN, TEMPO_BIN and TEMPO_XTASK_BIN to run")
+	if tempoBin == "" || xtaskBin == "" {
+		t.Skip("set TEMPO_BIN and TEMPO_XTASK_BIN to run")
 	}
 
 	spec := messages.BenchmarkSpec{
@@ -32,7 +32,6 @@ func TestTempoBootstrap(t *testing.T) {
 		NumAccounts:      8,
 		BaseMnemonic:     "test test test test test test test test test test test junk",
 		Validators:       2,
-		TempoDevnetBin:   devnetBin,
 		TempoBin:         tempoBin,
 		TempoXtaskBin:    xtaskBin,
 		TempoEpochLength: 100,

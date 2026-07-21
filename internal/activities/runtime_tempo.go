@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -14,9 +13,7 @@ import (
 	"time"
 
 	"github.com/mmsqe/evm-benchmark/internal/bench"
-
 	"github.com/mmsqe/evm-benchmark/internal/messages"
-	"gopkg.in/yaml.v3"
 )
 
 // Port offsets within a Tempo node's port block, mirroring tempo-py's
@@ -52,13 +49,14 @@ var tempoShapeMinGas = map[string]uint64{
 	"approve_transfer": 320000, // approve + transferFrom in one tx
 }
 
-// tempoRuntime bootstraps a Tempo devnet by delegating to tempo-py's
-// `tempo-devnet init`, which generates genesis, consensus keys, enode
-// identities and a per-node run.sh. Tempo is not a cosmos-sdk chain, so none
-// of the init/gentx/bech32 machinery applies.
+// tempoRuntime bootstraps a Tempo devnet in-process (see tempo_devnet.go):
+// `tempo-xtask generate-localnet` builds genesis, consensus keys and enode
+// identities, and the benchmark itself wires trusted peers and writes each
+// node's launcher. Tempo is not a cosmos-sdk chain, so none of the
+// init/gentx/bech32 machinery applies.
 //
-// Prerequisites (documented, not vendored): tempo-py's `tempo-devnet` on PATH
-// (or via TempoDevnetBin) plus `tempo` and `tempo-xtask` binaries.
+// Prerequisites (documented, not vendored): the `tempo` and `tempo-xtask`
+// binaries from the tempo repo. No Python / tempo-py toolchain is required.
 type tempoRuntime struct{}
 
 func (tempoRuntime) Name() string { return FamilyTempo }
@@ -93,8 +91,8 @@ func (tempoRuntime) EnrichSpec(spec *messages.BenchmarkSpec) error {
 	return nil
 }
 
-// Bootstrap writes a devnet.yaml describing the requested validators and runs
-// `tempo-devnet init` to materialise the network under spec.DataDir.
+// Bootstrap materialises the network under spec.DataDir/devnet, generating
+// genesis, keys and per-node launchers in-process (see generateTempoDevnet).
 func (t tempoRuntime) Bootstrap(ctx context.Context, spec messages.BenchmarkSpec, nodes []messages.NodeTarget) error {
 	if spec.Fullnodes > 0 {
 		return fmt.Errorf("tempo runtime does not support fullnodes yet (got %d)", spec.Fullnodes)
@@ -120,69 +118,11 @@ func (t tempoRuntime) Bootstrap(ctx context.Context, spec messages.BenchmarkSpec
 		}
 	}
 
-	validators := make([]map[string]any, 0, len(nodes))
-	for _, node := range nodes {
-		validators = append(validators, map[string]any{
-			"host":    "127.0.0.1",
-			"port":    tempoBasePort(spec, node.GlobalSeq),
-			"moniker": tempoMoniker(node.GlobalSeq),
-		})
-	}
-
-	devnet := map[string]any{
-		"chain_id": spec.EVMChainID,
-		// Every node takes a disjoint slice of the funded branch, plus index 0
-		// which is reserved for the validator key.
-		"accounts":   tempoFundedAccounts(spec),
-		"mnemonic":   spec.BaseMnemonic,
-		"validators": validators,
-	}
-	if spec.TempoEpochLength > 0 {
-		devnet["epoch_length"] = spec.TempoEpochLength
-	}
-	if spec.TempoGasLimit > 0 {
-		devnet["gas_limit"] = spec.TempoGasLimit
-	}
-	if spec.TempoBin != "" {
-		devnet["tempo_bin"] = spec.TempoBin
-	}
-	if spec.TempoXtaskBin != "" {
-		devnet["tempo_xtask_bin"] = spec.TempoXtaskBin
-	}
-	if len(spec.GenesisPatch) > 0 {
-		devnet["patch_genesis"] = spec.GenesisPatch
-	}
-	if len(spec.ConfigPatch) > 0 {
-		devnet["patch_reth"] = spec.ConfigPatch
-	}
-	if spec.RunnerType == "docker" {
-		devnet["docker"] = map[string]any{
-			"image":   spec.TempoDockerImage,
-			"network": tempoDockerNetwork(spec),
-		}
-	}
-
-	encoded, err := yaml.Marshal(devnet)
-	if err != nil {
-		return fmt.Errorf("encode devnet config: %w", err)
-	}
-	configPath := filepath.Join(spec.DataDir, "devnet.yaml")
-	if err := os.WriteFile(configPath, encoded, 0o644); err != nil {
-		return fmt.Errorf("write devnet config: %w", err)
-	}
-
-	devnetBin := spec.TempoDevnetBin
-	if devnetBin == "" {
-		devnetBin = "tempo-devnet"
-	}
-	dataDir := filepath.Join(spec.DataDir, "devnet")
-	initArgs := []string{"init", "--data", dataDir, "--config", configPath, "--force"}
-	if spec.RunnerType == "docker" {
-		// Emits docker-compose.yaml alongside the genesis and per-node dirs.
-		initArgs = append(initArgs, "--gen-compose-file")
-	}
-	if _, err := chainCmd(ctx, devnetBin, nil, initArgs...); err != nil {
-		return fmt.Errorf("tempo-devnet init: %w", err)
+	// Generate genesis, keys and per-node launchers in-process (see
+	// tempo_devnet.go). tempo-xtask still builds genesis and consensus keys;
+	// the rest of what tempo-py's `tempo-devnet init` did is done here.
+	if err := generateTempoDevnet(ctx, spec, nodes); err != nil {
+		return fmt.Errorf("generate tempo devnet: %w", err)
 	}
 
 	if spec.RunnerType == "docker" {
@@ -217,7 +157,7 @@ func tempoComposeProject(spec messages.BenchmarkSpec) string {
 }
 
 // tempoComposeArgs builds a `docker compose` invocation against the compose
-// file `tempo-devnet init --gen-compose-file` writes beside the network.
+// file writeTempoCompose writes beside the generated network.
 func tempoComposeArgs(spec messages.BenchmarkSpec, args ...string) []string {
 	composeFile := filepath.Join(spec.DataDir, "devnet", "docker-compose.yaml")
 	return append([]string{"compose", "-p", tempoComposeProject(spec), "-f", composeFile}, args...)
@@ -240,8 +180,8 @@ func (tempoRuntime) Validate(spec messages.BenchmarkSpec) error {
 			return fmt.Errorf("tempo_docker_image is required for runner_type=docker")
 		}
 		if spec.Validators < 2 {
-			// tempo-devnet builds each container's trusted-peers list from the
-			// *other* validators, so a single-node docker devnet is started
+			// The docker launcher builds each container's trusted-peers list from
+			// the *other* validators, so a single-node docker devnet is started
 			// with an empty --trusted-peers and the node refuses to boot.
 			return fmt.Errorf("chain_family=tempo with runner_type=docker needs validators >= 2 (got %d); use runner_type: local for a single node", spec.Validators)
 		}
@@ -283,8 +223,9 @@ func (tempoRuntime) EVMRPCPort(spec messages.BenchmarkSpec, globalSeq int) int {
 	return tempoBasePort(spec, globalSeq) + tempoHTTPPortOffset
 }
 
-// LocalStartCommand runs the launcher tempo-devnet generated for the node; it
-// resolves its own relative paths, so it must run from the node home.
+// LocalStartCommand runs the launcher generated for the node (see
+// tempoRunScript); it resolves its own relative paths, so it must run from the
+// node home.
 func (tempoRuntime) LocalStartCommand(spec messages.BenchmarkSpec, target messages.NodeTarget) ([]string, string) {
 	home := tempoNodeHome(spec, target.GlobalSeq)
 	return []string{filepath.Join(home, "run.sh")}, home
@@ -304,7 +245,7 @@ func tempoMoniker(globalSeq int) string {
 	return fmt.Sprintf("node%d", globalSeq)
 }
 
-// tempoNodeHome is the per-node directory `tempo-devnet init` creates.
+// tempoNodeHome is the per-node directory generateTempoDevnet creates.
 func tempoNodeHome(spec messages.BenchmarkSpec, globalSeq int) string {
 	return filepath.Join(spec.DataDir, "devnet", tempoMoniker(globalSeq))
 }
