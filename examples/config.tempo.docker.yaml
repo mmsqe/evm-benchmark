@@ -21,8 +21,10 @@ start:
   workflow_id: tempo-docker-benchmark
 
 benchmark:
-  data_dir: /tmp/tempo-benchmark-docker/data
-  out_dir: /tmp/tempo-benchmark-docker/output
+  # data_dir must be under a path the Docker VM shares into containers (each
+  # node dir is bind-mounted to /data); colima shares only $HOME and /tmp/colima.
+  data_dir: ~/tempo-benchmark-docker/data
+  out_dir: ~/tempo-benchmark-docker/output
 
   chain_family: tempo
   runner_type: docker
@@ -35,9 +37,8 @@ benchmark:
   tempo_compose_project: evm-benchmark-tempo
   # In-image command name (the node runs inside the container).
   tempo_bin: tempo
-  # Host binary: genesis/key generation runs outside docker (tx signing is
-  # in-process). tempo-xtask is the only host binary the docker profile needs.
-  tempo_xtask_bin: /Users/mavis/Documents/crypto/tempo/binary/bump_deps/tempo-xtask
+  # Runs on the HOST (genesis/key generation); resolved from PATH.
+  tempo_xtask_bin: tempo-xtask
 
   # Compose publishes each node's JSON-RPC on base_port+4, matching the local
   # runner, so node0 is reachable at http://127.0.0.1:8004.

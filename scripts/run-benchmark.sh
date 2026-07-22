@@ -134,7 +134,8 @@ if [[ -z "$DATA_ROOT" ]]; then
   case "$MODE" in
     docker) DATA_ROOT="/private/tmp/data" ;;
     tempo)  DATA_ROOT="/tmp/tempo-benchmark/data" ;;
-    tempo-docker) DATA_ROOT="/tmp/tempo-benchmark-docker/data" ;;
+    # Under $HOME so colima can bind-mount each node dir into its container.
+    tempo-docker) DATA_ROOT="$HOME/tempo-benchmark-docker/data" ;;
     *)      DATA_ROOT="/private/tmp/evm-benchmark-local/data" ;;
   esac
 fi
@@ -223,7 +224,7 @@ run_clean() {
   rm -rf /private/tmp/data /private/tmp/evm-benchmark-local /private/tmp/evm-benchmark
   case "$MODE" in
     tempo) rm -rf /tmp/tempo-benchmark ;;
-    tempo-docker) rm -rf /tmp/tempo-benchmark-docker ;;
+    tempo-docker) rm -rf "$HOME/tempo-benchmark-docker" ;;
   esac
 }
 

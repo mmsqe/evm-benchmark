@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 	"gopkg.in/yaml.v3"
@@ -55,6 +56,7 @@ func load(path string, runtimeValidation bool) (AppConfig, error) {
 	if err := yaml.Unmarshal(content, &cfg); err != nil {
 		return AppConfig{}, fmt.Errorf("decode config: %w", err)
 	}
+	expandSpecPaths(&cfg.Benchmark)
 
 	if err := applyChainConfig(path, &cfg); err != nil {
 		return AppConfig{}, err
@@ -66,6 +68,34 @@ func load(path string, runtimeValidation bool) (AppConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// expandPath resolves a leading ~ and $VAR / ${VAR} references in a config path.
+func expandPath(p string) string {
+	if p == "" {
+		return p
+	}
+	p = os.ExpandEnv(p)
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			if p == "~" {
+				return home
+			}
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
+}
+
+// expandSpecPaths expands ~ / $VAR in the spec's filesystem-path fields.
+func expandSpecPaths(spec *messages.BenchmarkSpec) {
+	spec.DataDir = expandPath(spec.DataDir)
+	spec.OutDir = expandPath(spec.OutDir)
+	spec.Binary = expandPath(spec.Binary)
+	spec.TempoBin = expandPath(spec.TempoBin)
+	spec.TempoXtaskBin = expandPath(spec.TempoXtaskBin)
+	spec.ChainsConfigPath = expandPath(spec.ChainsConfigPath)
+	spec.PatchImage.SourceDir = expandPath(spec.PatchImage.SourceDir)
 }
 
 func applyChainConfig(configPath string, cfg *AppConfig) error {

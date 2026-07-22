@@ -23,10 +23,10 @@ benchmark:
   chain_family: tempo
   runner_type: local
 
-  # Path to the node binary (also used in the generated per-node run.sh).
-  binary: /Users/mavis/Documents/crypto/tempo/binary/bump_deps/tempo
-  tempo_bin: /Users/mavis/Documents/crypto/tempo/binary/bump_deps/tempo
-  tempo_xtask_bin: /Users/mavis/Documents/crypto/tempo/binary/bump_deps/tempo-xtask
+  # Resolved from PATH. Override with an absolute path (~ / $VAR allowed) to
+  # benchmark a specific local build instead.
+  tempo_bin: tempo
+  tempo_xtask_bin: tempo-xtask
 
   # Ports are allocated in blocks of 6 per node; JSON-RPC sits at base+4,
   # i.e. node0 serves http://127.0.0.1:8004.

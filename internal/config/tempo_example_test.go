@@ -15,6 +15,7 @@ func TestTempoExampleConfigParses(t *testing.T) {
 	if b.ChainFamily != "tempo" {
 		t.Errorf("chain_family = %q", b.ChainFamily)
 	}
+	// tempo / tempo-xtask default to PATH command names.
 	if b.TempoBin == "" || b.TempoXtaskBin == "" {
 		t.Errorf("tempo binaries not parsed: bin=%q xtask=%q", b.TempoBin, b.TempoXtaskBin)
 	}
@@ -50,6 +51,10 @@ func TestTempoDockerExampleConfigParses(t *testing.T) {
 	// The stop script looks the project up by this fixed name.
 	if b.TempoComposeProject != "evm-benchmark-tempo" {
 		t.Errorf("compose project %q must match scripts/run-benchmark.sh", b.TempoComposeProject)
+	}
+	// data_dir uses ~ in the example; Load must expand it to a real host path.
+	if b.DataDir == "" || b.DataDir[0] == '~' {
+		t.Errorf("data_dir not expanded: %q", b.DataDir)
 	}
 }
 
