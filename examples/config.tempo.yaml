@@ -75,6 +75,9 @@ benchmark:
   #                that can conflict under optimistic parallel execution
   #   memo       - transferWithMemo (payment-lane variant, extra calldata)
   #   approve_transfer - approve + transferFrom in one tx (allowance consume)
+  #   swap       - order-book DEX: each account seeds a bid/ask wall then swaps
+  #                ALPHA/PATH against the shared book (needs erc20_transfer_gas
+  #                >= 8000000; walls reach ~3.3M gas)
   tempo_tx_shape: self
   # tempo_batch_calls: 4   # only used by tempo_tx_shape: batch
 

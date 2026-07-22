@@ -40,12 +40,13 @@ const (
 // up front instead of every transaction being dropped at runtime.
 // Shapes not listed here are covered by tempoMinTxGas.
 var tempoShapeMinGas = map[string]uint64{
-	"multitoken":       320000, // ~4 transfers in one tx
-	"batch":            300000, // ~271k + a few k per extra call (4 by default)
-	"fresh":            550000, // state creation ~doubles the cost
-	"approve":          550000, // allowance-slot write is expensive
-	"memo":             300000, // transfer plus a 32-byte memo
-	"approve_transfer": 320000, // approve + transferFrom in one tx
+	"multitoken":       320000,  // ~4 transfers in one tx
+	"batch":            300000,  // ~271k + a few k per extra call (4 by default)
+	"fresh":            550000,  // state creation ~doubles the cost
+	"approve":          550000,  // allowance-slot write is expensive
+	"memo":             300000,  // transfer plus a 32-byte memo
+	"approve_transfer": 320000,  // approve + transferFrom in one tx
+	"swap":             8000000, // order-book placeFlip walls reach ~3.3M gas
 }
 
 // tempoRuntime bootstraps a Tempo devnet in-process (see tempo_devnet.go):

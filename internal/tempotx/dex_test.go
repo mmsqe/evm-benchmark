@@ -1,0 +1,27 @@
+package tempotx
+
+import (
+	"encoding/hex"
+	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
+)
+
+// Reference encodings from a standard ABI encoder (eth_abi), including the
+// signed int16 tick -100 sign-extended to 0xff…ff9c.
+func TestDEXEncoding(t *testing.T) {
+	alpha := common.HexToAddress("0x20c0000000000000000000000000000000000001")
+	path := common.HexToAddress("0x20c0000000000000000000000000000000000000")
+
+	got := "0x" + hex.EncodeToString(PlaceFlip(alpha, 10000000000, true, -100, 100))
+	want := "0x922828f100000000000000000000000020c000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000002540be4000000000000000000000000000000000000000000000000000000000000000001ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff9c0000000000000000000000000000000000000000000000000000000000000064"
+	if got != want {
+		t.Errorf("PlaceFlip mismatch:\n got  %s\n want %s", got, want)
+	}
+
+	got = "0x" + hex.EncodeToString(SwapExactAmountIn(alpha, path, 100000000, 0))
+	want = "0xf8856c0f00000000000000000000000020c000000000000000000000000000000000000100000000000000000000000020c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005f5e1000000000000000000000000000000000000000000000000000000000000000000"
+	if got != want {
+		t.Errorf("SwapExactAmountIn mismatch:\n got  %s\n want %s", got, want)
+	}
+}

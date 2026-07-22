@@ -42,6 +42,7 @@ var tempoMemo = func() [32]byte {
 var tempoTxShapes = map[string]bool{
 	"self": true, "hot": true, "noop": true, "batch": true, "fresh": true,
 	"multitoken": true, "approve": true, "memo": true, "approve_transfer": true,
+	"swap": true,
 }
 
 // generateTempoNativeTxs derives this node's accounts and signs NumTxs native
@@ -67,6 +68,11 @@ func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, ta
 	}
 	lanes := spec.TempoNonceLanes
 	if lanes < 1 {
+		lanes = 1
+	}
+	if shape == "swap" {
+		// The wall placements (tx 0/1) must be mined before the swaps, which only
+		// holds within a single sequential nonce lane.
 		lanes = 1
 	}
 
@@ -134,7 +140,7 @@ func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, ta
 				NonceKey:             uint64(spec.TempoNonceKey) + uint64(lane),
 				Nonce:                laneNonce[lane],
 				FeeToken:             feeToken,
-				Calls:                buildTempoCalls(shape, token, r, batchCalls),
+				Calls:                buildTempoCalls(shape, i, token, r, batchCalls),
 			}
 			raw, err := tx.SignedRaw(key)
 			if err != nil {
@@ -198,9 +204,38 @@ feed:
 	return raws, nil
 }
 
-// buildTempoCalls returns the calls[] for one transaction of the given shape.
-func buildTempoCalls(shape string, token, recipient common.Address, batchCalls int) []tempotx.Call {
+// DEX (swap shape) parameters. The order book at StablecoinDEXAddress starts
+// empty, so each account first places deep bid/ask walls (tx 0 and 1) and then
+// swaps against the shared book — every account trading the same ALPHA/PATH pair
+// contends on its storage. Walls are large enough not to deplete over a run.
+var (
+	tempoDexBase  = common.HexToAddress("0x20c0000000000000000000000000000000000001") // ALPHA
+	tempoDexQuote = common.HexToAddress("0x20c0000000000000000000000000000000000000") // PATH (fee token)
+)
+
+const (
+	tempoDexWallAmount = uint64(1_000_000_000_000) // 1e12 per wall
+	tempoDexSwapAmount = uint64(100_000_000)       // 1e8 per swap
+)
+
+// buildTempoCalls returns the calls[] for transaction txIndex of the given shape.
+func buildTempoCalls(shape string, txIndex int, token, recipient common.Address, batchCalls int) []tempotx.Call {
 	switch shape {
+	case "swap":
+		// tx 0/1 seed a bid and an ask wall; the rest swap, alternating direction
+		// (even: sell base for quote against bids; odd: buy base with quote
+		// against asks). minAmountOut 0 keeps them from reverting on price.
+		dex := tempotx.StablecoinDEXAddress
+		switch {
+		case txIndex == 0:
+			return []tempotx.Call{{To: dex, Data: tempotx.PlaceFlip(tempoDexBase, tempoDexWallAmount, true, -100, 100)}}
+		case txIndex == 1:
+			return []tempotx.Call{{To: dex, Data: tempotx.PlaceFlip(tempoDexBase, tempoDexWallAmount, false, 100, -100)}}
+		case txIndex%2 == 0:
+			return []tempotx.Call{{To: dex, Data: tempotx.SwapExactAmountIn(tempoDexBase, tempoDexQuote, tempoDexSwapAmount, 0)}}
+		default:
+			return []tempotx.Call{{To: dex, Data: tempotx.SwapExactAmountIn(tempoDexQuote, tempoDexBase, tempoDexSwapAmount, 0)}}
+		}
 	case "noop":
 		// No data and no value: the cheapest transaction the chain accepts.
 		return []tempotx.Call{{To: recipient}}

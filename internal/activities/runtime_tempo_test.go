@@ -273,6 +273,59 @@ func TestTempoProduceTxsMultiLane(t *testing.T) {
 	}
 }
 
+// TestTempoProduceTxsSwapShape pins the order-book workload: tx 0/1 seed a bid
+// and an ask wall on the DEX, then swaps alternate direction against the shared
+// book. Verified end-to-end (all swaps mine with status 0x1) against a devnet.
+func TestTempoProduceTxsSwapShape(t *testing.T) {
+	dir := t.TempDir()
+	spec := tempoNativeSpec()
+	spec.NumAccounts = 1
+	spec.NumTxs = 4
+	spec.TempoTxShape = "swap"
+	spec.ERC20TransferGas = 8000000
+	txPath := filepath.Join(dir, "txs.json")
+
+	if _, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: 0}, txPath); err != nil {
+		t.Fatalf("ProduceTxs: %v", err)
+	}
+	var raws []string
+	if err := readJSON(txPath, &raws); err != nil {
+		t.Fatalf("read txs: %v", err)
+	}
+	if len(raws) != 4 {
+		t.Fatalf("want 4 txs, got %d", len(raws))
+	}
+
+	key, err := keygen.DeterministicKey(0, 1, spec.BaseMnemonic)
+	if err != nil {
+		t.Fatalf("derive key: %v", err)
+	}
+	quote := common.HexToAddress(tempoDefaultFeeToken)
+	dex := tempotx.StablecoinDEXAddress
+	mk := func(nonce uint64, data []byte) string {
+		raw, err := (&tempotx.Tx{
+			ChainID: 1337, MaxPriorityFeePerGas: 1000000000, MaxFeePerGas: 40000000000,
+			GasLimit: 8000000, Nonce: nonce, FeeToken: quote,
+			Calls: []tempotx.Call{{To: dex, Data: data}},
+		}).SignedRaw(key)
+		if err != nil {
+			t.Fatalf("build expected tx: %v", err)
+		}
+		return raw
+	}
+	want := []string{
+		mk(0, tempotx.PlaceFlip(tempoDexBase, tempoDexWallAmount, true, -100, 100)),
+		mk(1, tempotx.PlaceFlip(tempoDexBase, tempoDexWallAmount, false, 100, -100)),
+		mk(2, tempotx.SwapExactAmountIn(tempoDexBase, tempoDexQuote, tempoDexSwapAmount, 0)),
+		mk(3, tempotx.SwapExactAmountIn(tempoDexQuote, tempoDexBase, tempoDexSwapAmount, 0)),
+	}
+	for i := range want {
+		if raws[i] != want[i] {
+			t.Errorf("swap-shape tx %d does not match expected wall/swap sequence", i)
+		}
+	}
+}
+
 // TestGenerateTxsUsesProducerAndFallsBack pins the txProducer wiring in both
 // directions. If native delegation broke, Tempo runs would silently fall back
 // to legacy transactions; if the fallback broke, every cosmos run would fail.
