@@ -37,13 +37,18 @@ benchmark:
   # deliberately and report it alongside any result.
   tempo_gas_limit: 3000000000
 
-  # Extra flags appended to every `tempo node` launcher. Blocks cap near ~5,000
-  # txs well under the gas limit because the proposer builds for a time budget
-  # (consensus.target-block-time - consensus.network-budget, ~500ms by default);
-  # raise the budget to pack more per block:
+  # Extra flags appended to every `tempo node` launcher. Raising
+  # target-block-time LOWERS tx/s (~3,226 at 2s vs ~12,500 default): blocks cap
+  # near ~5,000 txs regardless, so longer blocks just mean fewer per second. If
+  # you raise it, also raise wait-for-proposal / wait-for-notarizations above it,
+  # or the validator times out its own view and consensus stalls at height 0.
   # tempo_node_args:
   #   - --consensus.target-block-time
   #   - 2s
+  #   - --consensus.wait-for-proposal
+  #   - 4s
+  #   - --consensus.wait-for-notarizations
+  #   - 4s
 
   evm_chain_id: 1337
   # Must match the devnet mnemonic: the benchmark signs from
@@ -64,7 +69,7 @@ benchmark:
   # lane). 1 = sequential. With num_accounts: 1 and tempo_tx_shape: approve, a
   # high lane count makes one owner issue parallel-eligible approves that all
   # write the same allowance slot — the conflict workload.
-  # tempo_nonce_lanes: 8
+  tempo_nonce_lanes: 1
   # Workload shape (state which one a number came from):
   #   self/hot   - uncontended / one shared recipient's balance slot
   #   noop       - the execution floor
@@ -78,8 +83,8 @@ benchmark:
   #   swap       - order-book DEX: each account seeds a bid/ask wall then swaps
   #                ALPHA/PATH against the shared book (needs erc20_transfer_gas
   #                >= 8000000; walls reach ~3.3M gas)
-  tempo_tx_shape: self
-  # tempo_batch_calls: 4   # only used by tempo_tx_shape: batch
+  tempo_tx_shape: batch
+  tempo_batch_calls: 16   # only used by tempo_tx_shape: batch
 
   # Tempo rejects native value transfers ("value transfer not allowed"), so the
   # workload is a TIP-20 transfer. The default target is the genesis fee token
@@ -89,7 +94,7 @@ benchmark:
   # Must exceed the per-shape gas floor or every tx is rejected up front:
   # ~272k (self/hot/noop/memo), ~320k (multitoken/approve_transfer),
   # ~550k (fresh/approve).
-  erc20_transfer_gas: 300000
+  erc20_transfer_gas: 412000
   # Signed as max_fee_per_gas for native txs; base fee rose to ~8 gwei under
   # load in earlier runs, so keep meaningful headroom.
   gas_price_wei: 40000000000
@@ -97,8 +102,8 @@ benchmark:
   # benchmark shape
   validators: 1
   fullnodes: 0
-  num_accounts: 500
-  num_txs: 40
+  num_accounts: 2000
+  num_txs: 100
   num_idle: 20
   broadcast_concurrency: 32
 
