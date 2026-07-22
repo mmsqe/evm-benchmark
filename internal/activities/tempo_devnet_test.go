@@ -8,7 +8,7 @@ import (
 )
 
 // twoLocalVals / identities are a fixed 2-validator local fixture used to pin
-// the generated launcher byte-for-byte against tempo-py's output format.
+// the generated launcher byte-for-byte.
 var (
 	twoLocalVals = []tempoDevnetValidator{
 		{Moniker: "node0", Host: "127.0.0.1", Port: 8000},
@@ -174,9 +174,9 @@ func TestTempoDockerIP(t *testing.T) {
 	}
 }
 
-// TestTempoXtaskGenesisArgs guards the defaults that used to live in tempo-py's
-// DevnetConfig: an unset epoch/gas must fall back to 100 / 500M rather than 0,
-// which tempo-xtask would reject or mis-size the block for.
+// TestTempoXtaskGenesisArgs guards the genesis-arg defaults: an unset epoch/gas
+// must fall back to 100 / 500M rather than 0, which tempo-xtask would reject or
+// mis-size the block for.
 func TestTempoXtaskGenesisArgs(t *testing.T) {
 	base := messages.BenchmarkSpec{
 		EVMChainID: 1337, NumAccounts: 8, Validators: 2,

@@ -2,13 +2,16 @@ package activities
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
+	"github.com/mmsqe/evm-benchmark/internal/tempotx"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -109,149 +112,123 @@ func TestTempoRejectsInsufficientGas(t *testing.T) {
 	}
 }
 
-// recordingStub writes a stub generator that records its argv to args.txt and
-// writes the given tx JSON array to --out, so a test can both assert the flags
-// and observe the produced count. Returns the stub path and the args file.
-func recordingStub(t *testing.T, dir, txsJSON string, count int) (stub, argsFile string) {
-	t.Helper()
-	stub = filepath.Join(dir, "stub.sh")
-	argsFile = filepath.Join(dir, "args.txt")
-	script := "#!/bin/sh\n" +
-		"printf '%s\\n' \"$@\" > " + argsFile + "\n" +
-		"out=\"\"; while [ $# -gt 0 ]; do if [ \"$1\" = --out ]; then out=$2; fi; shift; done\n" +
-		"printf '%s' '" + txsJSON + "' > \"$out\"\n" +
-		fmt.Sprintf("printf '{\"txs\":%d}\\n'\n", count)
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
-		t.Fatalf("write stub: %v", err)
+// tempoNativeSpec is a minimal spec that drives the in-process native generator.
+func tempoNativeSpec() messages.BenchmarkSpec {
+	return messages.BenchmarkSpec{
+		ChainFamily:               FamilyTempo,
+		NumAccounts:               2,
+		NumTxs:                    3,
+		EVMChainID:                1337,
+		BaseMnemonic:              "test test test test test test test test test test test junk",
+		ERC20TransferGas:          300000,
+		GasPriceWei:               40000000000,
+		TempoMaxPriorityFeePerGas: 1000000000,
+		ERC20ContractAddress:      tempoDefaultFeeToken,
 	}
-	return stub, argsFile
 }
 
-// TestTempoProduceTxsArguments pins the flags handed to the external
-// generator. These are load-bearing: --global-seq must stay 0 because
-// tempo-xtask funds only that HD branch, and --account-offset is what keeps
-// two nodes from signing with the same accounts (which would collide on
-// nonces and silently halve the load).
-func TestTempoProduceTxsArguments(t *testing.T) {
+// TestTempoProduceTxsNative pins the in-process native generator: it writes a
+// JSON array of exactly accounts*txs native (0x76) transactions.
+func TestTempoProduceTxsNative(t *testing.T) {
 	dir := t.TempDir()
-	stub, argsFile := recordingStub(t, dir, `["0x76aa","0x76bb"]`, 2)
-
-	spec := messages.BenchmarkSpec{
-		ChainFamily:      FamilyTempo,
-		TempoTxGenerator: stub,
-		NumAccounts:      500,
-		NumTxs:           100,
-		EVMChainID:       1337,
-		BaseMnemonic:     "test test test test test test test test test test test junk",
-		ERC20TransferGas: 300000,
-		GasPriceWei:      40000000000,
-	}
+	spec := tempoNativeSpec()
 	txPath := filepath.Join(dir, "txs.json")
 
-	count, err := (tempoRuntime{}).ProduceTxs(
-		context.Background(), spec, messages.NodeTarget{GlobalSeq: 2}, txPath)
+	count, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: 0}, txPath)
 	if err != nil {
 		t.Fatalf("ProduceTxs: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("count = %d, want 2", count)
+	if count != 6 {
+		t.Fatalf("count = %d, want 6", count)
+	}
+	var raws []string
+	if err := readJSON(txPath, &raws); err != nil {
+		t.Fatalf("read txs: %v", err)
+	}
+	if len(raws) != 6 {
+		t.Fatalf("wrote %d txs, want 6", len(raws))
+	}
+	for i, r := range raws {
+		if !strings.HasPrefix(r, "0x76") {
+			t.Fatalf("tx %d is not a native envelope: %s", i, r)
+		}
+	}
+}
+
+// TestTempoProduceTxsAccountOffset pins the load-bearing offset: node N draws a
+// disjoint slice starting at index N*accounts+1 of the single funded HD branch
+// (global seq 0). Getting this wrong makes two nodes sign from the same accounts
+// and silently halve the load. The output must match a tx built directly from
+// the expected account key.
+func TestTempoProduceTxsAccountOffset(t *testing.T) {
+	dir := t.TempDir()
+	spec := tempoNativeSpec()
+	spec.NumAccounts = 1
+	spec.NumTxs = 1
+	txPath := filepath.Join(dir, "txs.json")
+
+	if _, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: 2}, txPath); err != nil {
+		t.Fatalf("ProduceTxs: %v", err)
+	}
+	var raws []string
+	if err := readJSON(txPath, &raws); err != nil {
+		t.Fatalf("read txs: %v", err)
 	}
 
-	raw, err := os.ReadFile(argsFile)
+	// Node 2 with 1 account uses index 2*1+1 = 3.
+	key, err := keygen.DeterministicKey(0, 3, spec.BaseMnemonic)
 	if err != nil {
-		t.Fatalf("read args: %v", err)
+		t.Fatalf("derive key: %v", err)
 	}
-	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	got := map[string]string{}
-	for i := 0; i+1 < len(args); i++ {
-		if strings.HasPrefix(args[i], "--") {
-			got[args[i]] = args[i+1]
-		}
+	self := crypto.PubkeyToAddress(key.PublicKey)
+	token := common.HexToAddress(tempoDefaultFeeToken)
+	want, err := (&tempotx.Tx{
+		ChainID: 1337, MaxPriorityFeePerGas: 1000000000, MaxFeePerGas: 40000000000,
+		GasLimit: 300000, FeeToken: token,
+		Calls: []tempotx.Call{{To: token, Data: tempotx.Transfer(self, 1)}},
+	}).SignedRaw(key)
+	if err != nil {
+		t.Fatalf("build expected tx: %v", err)
 	}
+	if len(raws) != 1 || raws[0] != want {
+		t.Errorf("node 2 first tx does not match a tx signed by account index 3: %v", raws)
+	}
+}
 
-	want := map[string]string{
-		// Every node signs from the one branch tempo-xtask funds...
-		"--global-seq": "0",
-		// ...and node 2 takes the slice after nodes 0 and 1 (2 * 500).
-		"--account-offset":  "1000",
-		"--accounts":        "500",
-		"--txs-per-account": "100",
-		"--chain-id":        "1337",
-		"--gas-limit":       "300000",
-		"--max-fee-per-gas": "40000000000",
-		"--out":             txPath,
-	}
-	for flag, expected := range want {
-		if got[flag] != expected {
-			t.Errorf("%s = %q, want %q", flag, got[flag], expected)
+// TestTempoProduceTxsForwardsShape pins the workload-shape plumbing: a run
+// labelled "hot" that silently generated the uncontended shape would report a
+// contention number that never measured contention. self self-transfers; hot
+// targets a shared recipient, so their signed bytes must differ.
+func TestTempoProduceTxsForwardsShape(t *testing.T) {
+	gen := func(shape string) string {
+		dir := t.TempDir()
+		spec := tempoNativeSpec()
+		spec.NumAccounts = 1
+		spec.NumTxs = 1
+		spec.TempoTxShape = shape
+		txPath := filepath.Join(dir, "txs.json")
+		if _, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{}, txPath); err != nil {
+			t.Fatalf("ProduceTxs %s: %v", shape, err)
 		}
+		var raws []string
+		if err := readJSON(txPath, &raws); err != nil {
+			t.Fatalf("read txs: %v", err)
+		}
+		if len(raws) != 1 {
+			t.Fatalf("shape %s: wrote %d txs, want 1", shape, len(raws))
+		}
+		return raws[0]
 	}
-	// The fee token must default to the genesis TIP-20 rather than empty.
-	if got["--token"] != tempoDefaultFeeToken {
-		t.Errorf("--token = %q, want %q", got["--token"], tempoDefaultFeeToken)
-	}
-	// A shape is only forwarded when configured, so the generator keeps its own
-	// default; batch size rides along with it.
-	if _, ok := got["--tx-shape"]; ok {
-		t.Error("--tx-shape must not be passed when unset")
-	}
-	// Gas is always paid in the genesis fee token, even if the transfer target
-	// is customised, and each node gets a share of the host rather than all of it.
-	if got["--fee-token"] != tempoDefaultFeeToken {
-		t.Errorf("--fee-token = %q, want %q", got["--fee-token"], tempoDefaultFeeToken)
-	}
-	if got["--workers"] == "" || got["--workers"] == "0" {
-		t.Errorf("--workers must be set to bound per-node signing parallelism, got %q", got["--workers"])
+	if gen("self") == gen("hot") {
+		t.Error("hot and self must target different recipients, so their txs must differ")
 	}
 }
 
 // TestGenerateTxsUsesProducerAndFallsBack pins the txProducer wiring in both
-// directions. If the delegation broke, Tempo runs would silently fall back to
-// legacy transactions; if the fallback broke, every cosmos run would fail.
-// TestTempoProduceTxsForwardsShape pins the workload-shape plumbing: a run
-// labelled "hot" that silently generated the uncontended shape would report a
-// contention number that never measured contention.
-func TestTempoProduceTxsForwardsShape(t *testing.T) {
-	dir := t.TempDir()
-	stub, argsFile := recordingStub(t, dir, `["0x76aa"]`, 1)
-
-	spec := messages.BenchmarkSpec{
-		TempoTxGenerator: stub, NumAccounts: 1, NumTxs: 1, EVMChainID: 1337,
-		BaseMnemonic: "test", ERC20TransferGas: 300000, GasPriceWei: 1,
-		TempoTxShape: "hot", TempoBatchCalls: 8,
-	}
-	if _, err := (tempoRuntime{}).ProduceTxs(
-		context.Background(), spec, messages.NodeTarget{}, filepath.Join(dir, "txs.json")); err != nil {
-		t.Fatalf("ProduceTxs: %v", err)
-	}
-	raw, err := os.ReadFile(argsFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	got := map[string]string{}
-	for i := 0; i+1 < len(args); i++ {
-		if strings.HasPrefix(args[i], "--") {
-			got[args[i]] = args[i+1]
-		}
-	}
-	if got["--tx-shape"] != "hot" {
-		t.Errorf("--tx-shape = %q, want hot", got["--tx-shape"])
-	}
-	if got["--batch-calls"] != "8" {
-		t.Errorf("--batch-calls = %q, want 8", got["--batch-calls"])
-	}
-}
-
+// directions. If native delegation broke, Tempo runs would silently fall back
+// to legacy transactions; if the fallback broke, every cosmos run would fail.
 func TestGenerateTxsUsesProducerAndFallsBack(t *testing.T) {
 	dir := t.TempDir()
-	stub := filepath.Join(dir, "stub.sh")
-	script := "#!/bin/sh\nout=\"\"; while [ $# -gt 0 ]; do if [ \"$1\" = --out ]; then out=$2; fi; shift; done\n" +
-		"printf '[\"0x76aa\",\"0x76bb\",\"0x76cc\"]' > \"$out\"\nprintf '{\"txs\":3}\\n'\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	base := messages.BenchmarkSpec{
 		ChainFamily: FamilyTempo, DataDir: dir, NumAccounts: 2, NumTxs: 3,
 		EVMChainID: 1337, BaseMnemonic: "test test test test test test test test test test test junk",
@@ -274,27 +251,27 @@ func TestGenerateTxsUsesProducerAndFallsBack(t *testing.T) {
 		return count, val.Get(&count)
 	}
 
-	// Producer configured: its output must be used verbatim.
-	withProducer := base
-	withProducer.TempoTxGenerator = stub
-	count, err := run(withProducer)
+	// Default (native): the runtime produces 0x76 envelopes itself.
+	count, err := run(base)
 	if err != nil {
-		t.Fatalf("GenerateTxs with producer: %v", err)
+		t.Fatalf("GenerateTxs native: %v", err)
 	}
-	if count != 3 {
-		t.Errorf("count = %d, want 3 (producer output)", count)
+	if count != base.NumAccounts*base.NumTxs {
+		t.Errorf("native count = %d, want %d", count, base.NumAccounts*base.NumTxs)
 	}
 	var raws []string
 	if err := readJSON(filepath.Join(dir, "txs", "0.json"), &raws); err != nil {
 		t.Fatalf("read txs: %v", err)
 	}
-	if len(raws) != 3 || !strings.HasPrefix(raws[0], "0x76") {
-		t.Errorf("producer output was overwritten by the legacy signer: %v", raws)
+	if len(raws) == 0 || !strings.HasPrefix(raws[0], "0x76") {
+		t.Errorf("native path did not produce 0x76 txs: %v", raws)
 	}
 
-	// No producer: must fall through to the built-in signer, which emits
+	// tempo_legacy_txs: must fall through to the built-in signer, which emits
 	// legacy-typed transactions rather than 0x76.
-	count, err = run(base)
+	legacy := base
+	legacy.TempoLegacyTxs = true
+	count, err = run(legacy)
 	if err != nil {
 		t.Fatalf("GenerateTxs fallback: %v", err)
 	}
@@ -305,7 +282,7 @@ func TestGenerateTxsUsesProducerAndFallsBack(t *testing.T) {
 		t.Fatalf("read txs: %v", err)
 	}
 	if len(raws) > 0 && strings.HasPrefix(raws[0], "0x76") {
-		t.Error("fallback path produced native txs; the producer should not have run")
+		t.Error("fallback path produced native txs; the legacy signer should have run")
 	}
 }
 
@@ -317,7 +294,7 @@ func TestTempoDevnetFundsEveryNodeSlice(t *testing.T) {
 		funded := tempoFundedAccounts(messages.BenchmarkSpec{
 			NumAccounts: tc.accounts, Validators: tc.validators,
 		})
-		// gen_tempo_txs.py uses index = offset + i + 1, so the last node's
+		// generateTempoNativeTxs uses index = offset + i + 1, so the last node's
 		// highest index is (validators-1)*accounts + accounts.
 		highest := (tc.validators-1)*tc.accounts + tc.accounts
 		if highest > funded-1 {

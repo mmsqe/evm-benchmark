@@ -52,9 +52,9 @@ results are comparable.
 
 1. `tempo` and `tempo-xtask` binaries — build them in the tempo repo:
    `cargo build --bin tempo --bin tempo-xtask` (add `--release` for real runs).
-2. tempo-py's `tempo-devnet`, which generates the devnet (genesis, keys,
-   per-node `run.sh`). Its venv python is also what signs native transactions.
-3. The `temporal` CLI (the run script starts a dev server itself).
+   These are the only external binaries: the devnet and the native `0x76`
+   transactions are both generated in-process.
+2. The `temporal` CLI (the run script starts a dev server itself).
 
 ### Configure
 
@@ -62,11 +62,9 @@ Point `examples/config.tempo.yaml` at your toolchain — these paths are the onl
 machine-specific settings:
 
 ```yaml
-binary:             /path/to/tempo/target/release/tempo
-tempo_bin:          /path/to/tempo/target/release/tempo
-tempo_xtask_bin:    /path/to/tempo/target/release/tempo-xtask
-tempo_devnet_bin:   /path/to/tempo-py/.venv/bin/tempo-devnet
-tempo_tx_generator: /path/to/tempo-py/.venv/bin/python
+binary:          /path/to/tempo/target/release/tempo
+tempo_bin:       /path/to/tempo/target/release/tempo
+tempo_xtask_bin: /path/to/tempo/target/release/tempo-xtask
 ```
 
 The docker profile (`examples/config.tempo.docker.yaml`) needs the same, except
@@ -99,15 +97,15 @@ scripts/run-benchmark.sh --mode tempo --config /tmp/config.tempo.large.yaml run
 
 ### Transaction shape
 
-By default the load is Tempo's **native `0x76`** envelope, signed by
-`scripts/gen_tempo_txs.py` through tempo-py's canonical encoder.
-`tempo_tx_shape` selects the workload (`self`, `hot`, `noop`, `batch`, `fresh`,
-`multitoken`, `approve`, `memo`, `approve_transfer`) — see the `plan.md` shapes
-table for what each touches and its gas floor. Heavier shapes need a higher
-`erc20_transfer_gas`, which is enforced up front.
+By default the load is Tempo's **native `0x76`** envelope, signed in-process by
+the Go encoder in `internal/tempotx` (byte-verified against Tempo's canonical
+encoding). `tempo_tx_shape` selects the workload (`self`, `hot`, `noop`,
+`batch`, `fresh`, `multitoken`, `approve`, `memo`, `approve_transfer`) — see the
+`plan.md` shapes table for what each touches and its gas floor. Heavier shapes
+need a higher `erc20_transfer_gas`, which is enforced up front.
 
-Comment out `tempo_tx_generator` to fall back to legacy/London EVM transactions
-(Tempo's compatibility path) — but only for a single validator: the built-in
+Set `tempo_legacy_txs: true` to fall back to legacy/London EVM transactions
+(Tempo's compatibility path) — but only for a single validator: the legacy
 signer derives node *N*'s accounts from an HD branch `tempo-xtask` does not
 fund, so multi-node legacy load is rejected.
 
@@ -117,9 +115,9 @@ or `chains.jsonnet` profile — the network is described by the `tempo_*` fields
 
 ### Docker mode
 
-Runs the validators as containers. The devnet is generated with
-`tempo-devnet init --gen-compose-file` and started with `docker compose up -d`,
-so compose owns the lifecycle:
+Runs the validators as containers. The devnet (including a
+`docker-compose.yaml`) is generated in-process and started with
+`docker compose up -d`, so compose owns the lifecycle:
 
 ```bash
 docker pull ghcr.io/tempoxyz/tempo:latest
@@ -130,11 +128,11 @@ scripts/run-benchmark.sh --mode tempo-docker stop   # tears the cluster down
 Constraints, all enforced with clear errors:
 
 - `start_node: false` — compose starts the nodes, not the benchmark;
-- `validators: >= 2` — `tempo-devnet` derives each container's trusted peers
-  from the *other* validators, so a single-node docker devnet gets an empty
-  `--trusted-peers` and will not boot;
+- `validators: >= 2` — the docker launcher derives each container's trusted
+  peers from the *other* validators, so a single-node docker devnet gets an
+  empty `--trusted-peers` and will not boot;
 - `tempo_bin` is the in-image command name (`tempo`), while `tempo_xtask_bin`
-  and the tx generator still run on the host.
+  runs on the host (tx signing is in-process).
 
 Each node draws a disjoint slice of the funded account branch, so genesis funds
 `validators * num_accounts + 1` accounts (index 0 is the validator key). Note that this measures the tempo build inside the
@@ -158,14 +156,14 @@ so it is idempotent.
 ### Tests
 
 ```bash
-TEMPO_DEVNET_BIN=/path/to/tempo-py/.venv/bin/tempo-devnet \
 TEMPO_BIN=/path/to/tempo \
 TEMPO_XTASK_BIN=/path/to/tempo-xtask \
 go test ./internal/activities -run Tempo
 ```
 
-The devnet-bootstrapping test skips unless those three are set; the rest of the
-suite runs unconditionally.
+The devnet-bootstrapping test skips unless those two are set; the rest of the
+suite (including the byte-for-byte encoder check in `internal/tempotx`) runs
+unconditionally.
 
 See `plan.md` for measured Tempo characteristics and results.
 

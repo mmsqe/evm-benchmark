@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,9 +16,8 @@ import (
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 )
 
-// Port offsets within a Tempo node's port block, mirroring tempo-py's
-// tempo/devnet/ports.py (0=consensus-p2p, 1=execution-p2p, 2=metrics,
-// 3=authrpc, 4=http, 5=ws).
+// Port offsets within a Tempo node's port block (0=consensus-p2p,
+// 1=execution-p2p, 2=metrics, 3=authrpc, 4=http, 5=ws).
 const (
 	tempoHTTPPortOffset = 4
 	tempoPortsPerNode   = 6
@@ -37,8 +36,8 @@ const (
 )
 
 // tempoShapeMinGas is the measured per-transaction gas floor for shapes that
-// cost more than a plain transfer (see plan.md step 9), so a config can be
-// rejected up front instead of every transaction being dropped at runtime.
+// cost more than a plain transfer, so a config can be rejected
+// up front instead of every transaction being dropped at runtime.
 // Shapes not listed here are covered by tempoMinTxGas.
 var tempoShapeMinGas = map[string]uint64{
 	"multitoken":       320000, // ~4 transfers in one tx
@@ -56,15 +55,14 @@ var tempoShapeMinGas = map[string]uint64{
 // init/gentx/bech32 machinery applies.
 //
 // Prerequisites (documented, not vendored): the `tempo` and `tempo-xtask`
-// binaries from the tempo repo. No Python / tempo-py toolchain is required.
+// binaries from the tempo repo.
 type tempoRuntime struct{}
 
 func (tempoRuntime) Name() string { return FamilyTempo }
 
 // EnrichSpec applies Tempo-specific defaults. Tempo forbids native value
 // transfers and charges a ~271k intrinsic gas floor, so the generator must use
-// the ERC-20 (TIP-20) transaction shape with a sufficient gas limit; see
-// plan.md "Step 1 results".
+// the ERC-20 (TIP-20) transaction shape with a sufficient gas limit.
 func (tempoRuntime) EnrichSpec(spec *messages.BenchmarkSpec) error {
 	if spec.TxType == messages.SimpleTransferTx {
 		return fmt.Errorf(
@@ -119,8 +117,8 @@ func (t tempoRuntime) Bootstrap(ctx context.Context, spec messages.BenchmarkSpec
 	}
 
 	// Generate genesis, keys and per-node launchers in-process (see
-	// tempo_devnet.go). tempo-xtask still builds genesis and consensus keys;
-	// the rest of what tempo-py's `tempo-devnet init` did is done here.
+	// tempo_devnet.go): tempo-xtask builds genesis and consensus keys, and the
+	// rest of the network wiring is done here.
 	if err := generateTempoDevnet(ctx, spec, nodes); err != nil {
 		return fmt.Errorf("generate tempo devnet: %w", err)
 	}
@@ -190,15 +188,15 @@ func (tempoRuntime) Validate(spec messages.BenchmarkSpec) error {
 	if spec.StartNode && spec.TempoBin == "" {
 		return fmt.Errorf("tempo_bin is required when start_node=true")
 	}
-	if spec.TempoTxGenerator == "" && spec.Validators > 1 && spec.ValidatorGenerateLoad {
-		// The built-in signer derives node N's accounts from HD branch N, but
+	if spec.TempoLegacyTxs && spec.Validators > 1 && spec.ValidatorGenerateLoad {
+		// The legacy signer derives node N's accounts from HD branch N, but
 		// tempo-xtask funds only branch 0, so every node above the first would
-		// send from unfunded accounts and its load would be rejected. The
-		// native generator avoids this by giving each node a disjoint slice of
-		// branch 0.
+		// send from unfunded accounts and its load would be rejected. The native
+		// generator (the default) avoids this by giving each node a disjoint
+		// slice of branch 0.
 		return fmt.Errorf(
-			"multi-node load with the built-in signer would use unfunded accounts on nodes 1..%d; "+
-				"set tempo_tx_generator (native txs) or run a single validator", spec.Validators-1)
+			"multi-node load with tempo_legacy_txs would use unfunded accounts on nodes 1..%d; "+
+				"use the native generator (unset tempo_legacy_txs) or run a single validator", spec.Validators-1)
 	}
 	return nil
 }
@@ -264,85 +262,43 @@ func assertPortFree(port int) error {
 			"stop it first (e.g. scripts/run-benchmark.sh --mode tempo stop)", port)
 }
 
-// ProducesTxs reports whether an external generator is configured.
+// ProducesTxs reports whether the runtime signs the node's transactions itself.
+// True for the native 0x76 path (the default); false when tempo_legacy_txs opts
+// into the shared legacy/London signer in internal/bench.
 func (tempoRuntime) ProducesTxs(spec messages.BenchmarkSpec) bool {
-	return strings.TrimSpace(spec.TempoTxGenerator) != ""
+	return !spec.TempoLegacyTxs
 }
 
-// ProduceTxs generates the node's transaction file with an external generator
-// (see scripts/gen_tempo_txs.py), which emits Tempo's native 0x76 envelope via
-// tempo-py's canonical encoder. Only called when ProducesTxs reports true.
+// ProduceTxs writes the node's transaction file as Tempo's native 0x76 envelope
+// (see internal/tempotx and generateTempoNativeTxs), signed in-process. Only
+// called when ProducesTxs reports true.
 //
-// The generator derives keys with the same path as internal/keygen, so a chain
-// funded for the built-in signer is funded for this one.
+// Keys are derived with the same path as internal/keygen, so a chain funded for
+// the built-in signer is funded for this one.
 func (tempoRuntime) ProduceTxs(
 	ctx context.Context,
 	spec messages.BenchmarkSpec,
 	target messages.NodeTarget,
 	txPath string,
 ) (int, error) {
-	generator := strings.TrimSpace(spec.TempoTxGenerator)
-
-	token := spec.ERC20ContractAddress
-	if token == "" {
-		token = tempoDefaultFeeToken
-	}
-	args := append([]string{}, spec.TempoTxGeneratorArgs...)
-	args = append(args,
-		"--out", txPath,
-		// tempo-xtask funds only the m/44'/60'/0'/0/i branch, so every node
-		// draws from that branch and takes a disjoint slice of it instead of
-		// using its own (unfunded) branch the way the legacy signer does.
-		"--global-seq", "0",
-		"--account-offset", strconv.Itoa(target.GlobalSeq*spec.NumAccounts),
-		"--accounts", strconv.Itoa(spec.NumAccounts),
-		"--txs-per-account", strconv.Itoa(spec.NumTxs),
-		"--chain-id", strconv.FormatInt(spec.EVMChainID, 10),
-		"--mnemonic", spec.BaseMnemonic,
-		"--token", token,
-		"--gas-limit", strconv.FormatUint(spec.ERC20TransferGas, 10),
-		"--max-fee-per-gas", strconv.FormatInt(spec.GasPriceWei, 10),
-		"--max-priority-fee-per-gas", strconv.FormatInt(spec.TempoMaxPriorityFeePerGas, 10),
-		"--nonce-key", strconv.Itoa(spec.TempoNonceKey),
-		// Gas is always paid in the genesis fee token: a custom transfer target
-		// is not necessarily a valid or funded fee token.
-		"--fee-token", tempoDefaultFeeToken,
-		// One GenerateTxs activity runs per node concurrently, so let each
-		// generator use a fair share of the host instead of cpu_count each.
-		"--workers", strconv.Itoa(tempoSigningWorkers(spec)),
-	)
-	if shape := strings.TrimSpace(spec.TempoTxShape); shape != "" {
-		args = append(args, "--tx-shape", shape)
-	}
-	if spec.TempoBatchCalls > 0 {
-		args = append(args, "--batch-calls", strconv.Itoa(spec.TempoBatchCalls))
-	}
-
-	out, err := chainCmd(ctx, generator, nil, args...)
+	raws, err := generateTempoNativeTxs(ctx, spec, target)
 	if err != nil {
 		return 0, fmt.Errorf("generate native tempo txs: %w", err)
 	}
-
-	// The generator reports a JSON summary on stdout; fall back to counting the
-	// file if that ever changes, rather than failing the run over a log line.
-	var summary struct {
-		Txs int `json:"txs"`
+	encoded, err := json.Marshal(raws)
+	if err != nil {
+		return 0, fmt.Errorf("encode tempo txs: %w", err)
 	}
-	// The summary is the final line: incidental generator output (warnings,
-	// progress) precedes it and must not break parsing.
-	trimmed := strings.TrimSpace(string(out))
-	lastLine := trimmed[strings.LastIndexByte(trimmed, '\n')+1:]
-	if jsonErr := json.Unmarshal([]byte(lastLine), &summary); jsonErr != nil || summary.Txs == 0 {
-		var raws []string
-		if readErr := readJSON(txPath, &raws); readErr != nil {
-			return 0, fmt.Errorf("read generated tempo txs: %w", readErr)
-		}
-		if len(raws) == 0 {
-			return 0, fmt.Errorf("generator %q produced no transactions", generator)
-		}
-		return len(raws), nil
+	// Write via a temp file so a crash cannot leave truncated JSON where a
+	// previously valid transaction file used to be.
+	tmp := txPath + ".tmp"
+	if err := os.WriteFile(tmp, encoded, 0o644); err != nil {
+		return 0, fmt.Errorf("write tempo txs: %w", err)
 	}
-	return summary.Txs, nil
+	if err := os.Rename(tmp, txPath); err != nil {
+		return 0, fmt.Errorf("finalize tempo txs: %w", err)
+	}
+	return len(raws), nil
 }
 
 // tempoSigningWorkers divides the host between the per-node generators that

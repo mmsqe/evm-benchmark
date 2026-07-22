@@ -60,13 +60,12 @@ type BenchmarkSpec struct {
 	TempoEpochLength int    `yaml:"tempo_epoch_length"`
 	TempoGasLimit    int64  `yaml:"tempo_gas_limit"`
 
-	// Native (0x76) transaction generation. When TempoTxGenerator is set that
-	// executable produces the node's tx file instead of the built-in legacy
-	// signer; TempoTxGeneratorArgs are prepended to the flags passed to it.
-	TempoTxGenerator          string   `yaml:"tempo_tx_generator"`
-	TempoTxGeneratorArgs      []string `yaml:"tempo_tx_generator_args"`
-	TempoMaxPriorityFeePerGas int64    `yaml:"tempo_max_priority_fee_per_gas"`
-	TempoNonceKey             int      `yaml:"tempo_nonce_key"`
+	// Native (0x76) transaction generation. Tempo's native envelope is signed
+	// in-process (internal/tempotx) and is the default. Set TempoLegacyTxs to
+	// fall back to the shared legacy/London signer (single-validator only).
+	TempoLegacyTxs            bool  `yaml:"tempo_legacy_txs"`
+	TempoMaxPriorityFeePerGas int64 `yaml:"tempo_max_priority_fee_per_gas"`
+	TempoNonceKey             int   `yaml:"tempo_nonce_key"`
 	// Workload shape for the native generator: self (uncontended), hot (every
 	// sender writes one recipient's balance), noop (execution floor) or batch
 	// (several calls per transaction). Empty means the generator's default.

@@ -16,17 +16,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// This file generates a Tempo devnet in-process, replacing the external
-// tempo-py `tempo-devnet` CLI. `tempo-xtask generate-localnet` (a Rust binary
-// in the tempo repo) still produces genesis, consensus keys and enode
+// This file generates a Tempo devnet in-process. `tempo-xtask generate-localnet`
+// (a Rust binary in the tempo repo) produces genesis, consensus keys and enode
 // identities; everything it does not do — renaming validator dirs to monikers,
 // wiring trusted peers, writing per-node launchers and a docker-compose file —
-// is the thin shim that used to live in tempo-py and is reimplemented here so
-// the benchmark depends only on the two Rust binaries it already builds.
+// is done here, so the benchmark depends only on the two Rust binaries it
+// already builds.
 //
-// Only the single-network subset the benchmark uses is reproduced (local
-// supervisor-free launch + single-network docker compose). tempo-devnet's
-// two-network / follow-node / p2p-proxy topologies are intentionally omitted.
+// Only the single-network subset the benchmark uses is reproduced: a local
+// supervisor-free launch and a single-network docker compose (no two-network /
+// follow-node / p2p-proxy topologies).
 
 const (
 	// tempoLocalnetSecret is the fixed passphrase tempo-xtask uses to encrypt
@@ -34,8 +33,8 @@ const (
 	// It must match generate_localnet.rs's LOCALNET_SIGNING_KEY_SECRET.
 	tempoLocalnetSecret = "tempo-localnet-signing-key-secret"
 
-	// Defaults mirroring tempo-py's DevnetConfig, applied when the spec leaves
-	// the corresponding field at its zero value.
+	// Defaults applied when the spec leaves the corresponding field at its zero
+	// value.
 	tempoDefaultEpochLength = 100
 	tempoDefaultGasLimit    = 500_000_000
 	tempoDefaultXtaskBin    = "tempo-xtask"
@@ -59,9 +58,9 @@ type tempoDevnetValidator struct {
 }
 
 // generateTempoDevnet materialises a Tempo devnet under spec.DataDir/devnet,
-// producing the same on-disk layout the benchmark previously obtained from
-// `tempo-devnet init`. In docker mode it also writes a single-network
-// docker-compose.yaml; the caller starts the cluster with `docker compose up`.
+// producing the on-disk layout the benchmark launches from. In docker mode it
+// also writes a single-network docker-compose.yaml; the caller starts the
+// cluster with `docker compose up`.
 func generateTempoDevnet(ctx context.Context, spec messages.BenchmarkSpec, nodes []messages.NodeTarget) error {
 	docker := spec.RunnerType == "docker"
 
@@ -75,7 +74,7 @@ func generateTempoDevnet(ctx context.Context, spec messages.BenchmarkSpec, nodes
 	}
 
 	dataDir := filepath.Join(spec.DataDir, "devnet")
-	// --force semantics: tempo-devnet clears the data dir before regenerating.
+	// Clear the data dir before regenerating so re-bootstrap is idempotent.
 	if err := os.RemoveAll(dataDir); err != nil {
 		return fmt.Errorf("clear devnet dir: %w", err)
 	}
@@ -135,7 +134,7 @@ func generateTempoDevnet(ctx context.Context, spec messages.BenchmarkSpec, nodes
 			return err
 		}
 	}
-	// Give each node its own copy of the (patched) genesis, matching tempo-devnet.
+	// Give each node its own copy of the (patched) genesis.
 	genesisBytes, err := os.ReadFile(genesisPath)
 	if err != nil {
 		return fmt.Errorf("read genesis: %w", err)
@@ -207,8 +206,8 @@ func generateTempoDevnet(ctx context.Context, spec messages.BenchmarkSpec, nodes
 	return nil
 }
 
-// tempoXtaskGenesisArgs mirrors tempo-py's DevnetConfig.to_genesis_args for the
-// fields the benchmark sets; the rest keep tempo-xtask's own defaults.
+// tempoXtaskGenesisArgs builds the `tempo-xtask generate-localnet` genesis args
+// for the fields the benchmark sets; the rest keep tempo-xtask's own defaults.
 func tempoXtaskGenesisArgs(spec messages.BenchmarkSpec, validatorsArg string) []string {
 	epoch := spec.TempoEpochLength
 	if epoch <= 0 {
@@ -229,8 +228,7 @@ func tempoXtaskGenesisArgs(spec messages.BenchmarkSpec, validatorsArg string) []
 }
 
 // tempoNodeArgs builds the `tempo node` argument list (everything after the
-// binary), mirroring tempo-py's _build_common_node_args. All paths are
-// node-dir-relative; the launcher cd's there first.
+// binary). All paths are node-dir-relative; the launcher cd's there first.
 func tempoNodeArgs(base int, listenAddr, metricsAddr, rpcAddr string, trustedPeers []string, dockerBootnodes bool) []string {
 	args := []string{
 		"node",
@@ -263,7 +261,7 @@ func tempoNodeArgs(base int, listenAddr, metricsAddr, rpcAddr string, trustedPee
 }
 
 // tempoLocalTrustedPeers advertises every validator (self included) at its host
-// loopback address and execution-p2p port, matching tempo-py's _trusted_peers.
+// loopback address and execution-p2p port.
 func tempoLocalTrustedPeers(vals []tempoDevnetValidator, identities []string) []string {
 	peers := make([]string, 0, len(vals))
 	for i, v := range vals {
@@ -273,8 +271,7 @@ func tempoLocalTrustedPeers(vals []tempoDevnetValidator, identities []string) []
 }
 
 // tempoDockerTrustedPeers advertises the OTHER validators by docker service
-// name at the fixed execution-p2p port, matching tempo-py's
-// _docker_trusted_peers(exclude_moniker=self).
+// name at the fixed execution-p2p port (self is excluded).
 func tempoDockerTrustedPeers(vals []tempoDevnetValidator, identities []string, self int) []string {
 	peers := make([]string, 0, len(vals)-1)
 	for i, v := range vals {
@@ -286,10 +283,10 @@ func tempoDockerTrustedPeers(vals []tempoDevnetValidator, identities []string, s
 	return peers
 }
 
-// tempoRunScript renders the `run.sh`/`docker-run.sh` launcher, byte-compatible
-// with tempo-py's _write_run_script_content: an `exec`'d command with the
-// binary and each argument single-quoted on its own continued line. binary is
-// the exec target; nodeArgs is the argv after it (starting with "node").
+// tempoRunScript renders the `run.sh`/`docker-run.sh` launcher: an `exec`'d
+// command with the binary and each argument single-quoted on its own continued
+// line. binary is the exec target; nodeArgs is the argv after it (starting with
+// "node").
 func tempoRunScript(binary string, nodeArgs []string, docker bool) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
@@ -318,14 +315,13 @@ func writeExecutable(path, content string) error {
 	return nil
 }
 
-// shQuote wraps a string in single quotes, escaping embedded single quotes,
-// matching tempo-py's _sh_quote.
+// shQuote wraps a string in single quotes, escaping embedded single quotes.
 func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // tempoDockerIP returns the static IP for validator index on the docker bridge
-// subnet, mirroring tempo-py's DevnetConfig.docker_ip.
+// subnet.
 func tempoDockerIP(subnet string, index int) (string, error) {
 	_, ipnet, err := net.ParseCIDR(subnet)
 	if err != nil {
@@ -341,8 +337,8 @@ func tempoDockerIP(subnet string, index int) (string, error) {
 	return net.IP(out[:]).String(), nil
 }
 
-// patchTempoGenesis deep-merges patch into the genesis file (objects merge
-// recursively, everything else is replaced), matching tempo-py's jsonmerge use.
+// patchTempoGenesis deep-merges patch into the genesis file: objects merge
+// recursively, everything else is replaced.
 func patchTempoGenesis(genesisPath string, patch map[string]interface{}) error {
 	raw, err := os.ReadFile(genesisPath)
 	if err != nil {
@@ -416,8 +412,8 @@ type composeIPAM struct {
 	Config []map[string]string `yaml:"config"`
 }
 
-// writeTempoCompose writes a single-network docker-compose.yaml functionally
-// equivalent to tempo-py's _generate_single_network_compose.
+// writeTempoCompose writes a single-network docker-compose.yaml for the
+// generated validators.
 func writeTempoCompose(spec messages.BenchmarkSpec, vals []tempoDevnetValidator, dockerIPs []string, dataDir string) error {
 	network := tempoDockerNetwork(spec)
 	image := spec.TempoDockerImage

@@ -126,17 +126,18 @@ func TestTempoRejectsInsufficientGasForShape(t *testing.T) {
 }
 
 func TestTempoRejectsMultiNodeLegacyLoad(t *testing.T) {
-	// The built-in signer derives node N from HD branch N, which tempo-xtask
+	// The legacy signer derives node N from HD branch N, which tempo-xtask
 	// never funds; only the native generator partitions the funded branch.
 	legacy := messages.BenchmarkSpec{
 		RunnerType: "local", Validators: 4, ValidatorGenerateLoad: true,
+		TempoLegacyTxs: true,
 	}
 	if err := (tempoRuntime{}).Validate(legacy); err == nil {
 		t.Error("expected multi-node legacy load to be rejected as unfunded")
 	}
-	// Native generator partitions accounts, so multi-node is fine.
+	// The native generator (the default) partitions accounts, so multi-node is fine.
 	native := legacy
-	native.TempoTxGenerator = "/usr/bin/python3"
+	native.TempoLegacyTxs = false
 	if err := (tempoRuntime{}).Validate(native); err != nil {
 		t.Errorf("native multi-node load must be allowed: %v", err)
 	}
@@ -214,26 +215,32 @@ func TestTempoPreStartCheckGuardsOccupiedPort(t *testing.T) {
 	}
 }
 
-func TestExternallyGeneratedGuardsRegeneration(t *testing.T) {
-	// Native txs must never be re-signed by the legacy signer at run time.
-	native := messages.BenchmarkSpec{ChainFamily: FamilyTempo, TempoTxGenerator: "/usr/bin/python3"}
-	if !externallyGenerated(native) {
-		t.Error("configured tempo generator must suppress legacy regeneration")
+func TestRuntimeGeneratedTxsGuardsRegeneration(t *testing.T) {
+	// Native txs (the tempo default) must never be re-signed by the legacy
+	// signer at run time.
+	native := messages.BenchmarkSpec{ChainFamily: FamilyTempo}
+	if !runtimeGeneratedTxs(native) {
+		t.Error("native tempo txs must suppress legacy regeneration")
 	}
-	// Tempo without a generator uses the built-in signer, which may regenerate.
-	builtin := messages.BenchmarkSpec{ChainFamily: FamilyTempo}
-	if externallyGenerated(builtin) {
-		t.Error("tempo without a generator must keep the built-in signer path")
+	// Tempo in legacy mode uses the built-in signer, which may regenerate.
+	legacy := messages.BenchmarkSpec{ChainFamily: FamilyTempo, TempoLegacyTxs: true}
+	if runtimeGeneratedTxs(legacy) {
+		t.Error("tempo_legacy_txs must keep the built-in signer path")
 	}
 	// Cosmos is unaffected.
-	if externallyGenerated(messages.BenchmarkSpec{ChainFamily: FamilyCosmos}) {
+	if runtimeGeneratedTxs(messages.BenchmarkSpec{ChainFamily: FamilyCosmos}) {
 		t.Error("cosmos must keep its regeneration behaviour")
 	}
 }
 
-func TestTempoProduceTxsInertWithoutGenerator(t *testing.T) {
-	if (tempoRuntime{}).ProducesTxs(messages.BenchmarkSpec{}) {
-		t.Error("no generator configured must fall back to the built-in signer")
+func TestTempoProducesTxsByDefault(t *testing.T) {
+	// Native 0x76 is the default; the runtime signs the node's txs itself.
+	if !(tempoRuntime{}).ProducesTxs(messages.BenchmarkSpec{}) {
+		t.Error("tempo must produce native txs by default")
+	}
+	// Opting into legacy mode falls back to the shared built-in signer.
+	if (tempoRuntime{}).ProducesTxs(messages.BenchmarkSpec{TempoLegacyTxs: true}) {
+		t.Error("tempo_legacy_txs must fall back to the built-in signer")
 	}
 }
 

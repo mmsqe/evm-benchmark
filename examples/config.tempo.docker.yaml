@@ -35,7 +35,8 @@ benchmark:
   tempo_compose_project: evm-benchmark-tempo
   # In-image command name (the node runs inside the container).
   tempo_bin: tempo
-  # Host binaries: genesis/key generation and tx signing run outside docker.
+  # Host binary: genesis/key generation runs outside docker (tx signing is
+  # in-process). tempo-xtask is the only host binary the docker profile needs.
   tempo_xtask_bin: /Users/mavis/Documents/crypto/tempo/binary/bump_deps/tempo-xtask
 
   # Compose publishes each node's JSON-RPC on base_port+4, matching the local
@@ -47,10 +48,7 @@ benchmark:
   evm_chain_id: 1337
   base_mnemonic: "test test test test test test test test test test test junk"
 
-  # Native 0x76 transactions, signed on the host.
-  tempo_tx_generator: /Users/mavis/Documents/crypto/tempo-py/.venv/bin/python
-  tempo_tx_generator_args:
-    - scripts/gen_tempo_txs.py
+  # Native 0x76 transactions, signed in-process (the default).
   tempo_max_priority_fee_per_gas: 1000000000
   tempo_nonce_key: 0
 

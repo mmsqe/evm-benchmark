@@ -656,9 +656,9 @@ func doRun(
 				// native envelope with a legacy one. Those transactions carry an
 				// EIP-1559 style max fee instead, which already absorbs base-fee
 				// movement, so only the built-in signer needs regenerating.
-				if externallyGenerated(spec) {
+				if runtimeGeneratedTxs(spec) {
 					logger.Info(
-						"skipping gas-price regeneration for externally generated txs",
+						"skipping gas-price regeneration for runtime-generated native txs",
 						"node", target.GlobalSeq,
 						"suggested_gas_price_wei", suggested,
 						"signed_max_fee_per_gas", spec.GasPriceWei,
@@ -1402,10 +1402,11 @@ func ethAddressToBech32(addr common.Address, prefix string) (string, error) {
 	return bech32.Encode(prefix, fiveBit)
 }
 
-// externallyGenerated reports whether this run's transactions came from a
-// chain-specific generator rather than the built-in signer, in which case they
-// must not be re-signed by internal/bench.
-func externallyGenerated(spec messages.BenchmarkSpec) bool {
+// runtimeGeneratedTxs reports whether this run's transactions were produced by
+// the chain runtime itself (e.g. Tempo's native 0x76 signer) rather than the
+// built-in legacy signer, in which case they must not be re-signed by
+// internal/bench.
+func runtimeGeneratedTxs(spec messages.BenchmarkSpec) bool {
 	chain, err := resolveRuntime(spec)
 	if err != nil {
 		return false

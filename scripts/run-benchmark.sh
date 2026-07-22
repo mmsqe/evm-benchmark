@@ -24,8 +24,7 @@ Options:
                           Runner mode (default: docker). "tempo" benchmarks a
                           Tempo devnet locally; "tempo-docker" runs the Tempo
                           validators as containers via docker compose (needs
-                          tempo-devnet/tempo-xtask on the host and a tempo
-                          image; see plan.md).
+                          tempo-xtask on the host and a tempo image).
   --config <path>         Config file path
   --data-root <path>      Root path used by benchctl gen
   --chain-config <name>   CHAIN_CONFIG value (default: evmd)
