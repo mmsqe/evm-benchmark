@@ -50,25 +50,25 @@ results are comparable.
 
 ### Prerequisites
 
-1. `tempo` and `tempo-xtask` binaries — build them in the tempo repo:
-   `cargo build --bin tempo --bin tempo-xtask` (add `--release` for real runs).
-   These are the only external binaries: the devnet and the native `0x76`
-   transactions are both generated in-process.
+1. `tempo` and `tempo-xtask` on your `PATH` — `cargo install` them, or build in
+   the tempo repo (`cargo build --bin tempo --bin tempo-xtask`, add `--release`
+   for real runs) and point the config at the build. These are the only external
+   binaries: the devnet and the native `0x76` transactions are both generated
+   in-process.
 2. The `temporal` CLI (the run script starts a dev server itself).
 
 ### Configure
 
-Point `examples/config.tempo.yaml` at your toolchain — these paths are the only
-machine-specific settings:
+`examples/config.tempo.yaml` resolves `tempo` and `tempo-xtask` from your `PATH`
+by default (`which tempo`). Override only to benchmark a specific build:
 
 ```yaml
-binary:          /path/to/tempo/target/release/tempo
 tempo_bin:       /path/to/tempo/target/release/tempo
 tempo_xtask_bin: /path/to/tempo/target/release/tempo-xtask
 ```
 
-The docker profile (`examples/config.tempo.docker.yaml`) needs the same, except
-`tempo_bin` is the in-image command name.
+The docker profile (`examples/config.tempo.docker.yaml`) uses the in-image
+`tempo` command name for `tempo_bin`.
 
 ### Run
 
