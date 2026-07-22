@@ -60,6 +60,11 @@ benchmark:
   # One nonce lane per account keeps ordering comparable with legacy txs; raise
   # it only as an explicitly reported axis (see plan.md).
   tempo_nonce_key: 0
+  # Spread each account's txs across this many nonce lanes (nonce_key = base +
+  # lane). 1 = sequential. With num_accounts: 1 and tempo_tx_shape: approve, a
+  # high lane count makes one owner issue parallel-eligible approves that all
+  # write the same allowance slot — the conflict workload.
+  # tempo_nonce_lanes: 8
   # Workload shape (state which one a number came from):
   #   self/hot   - uncontended / one shared recipient's balance slot
   #   noop       - the execution floor

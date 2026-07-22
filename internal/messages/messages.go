@@ -70,6 +70,11 @@ type BenchmarkSpec struct {
 	TempoLegacyTxs            bool  `yaml:"tempo_legacy_txs"`
 	TempoMaxPriorityFeePerGas int64 `yaml:"tempo_max_priority_fee_per_gas"`
 	TempoNonceKey             int   `yaml:"tempo_nonce_key"`
+	// Spread each account's txs round-robin across this many 2D-nonce lanes
+	// (nonce_key = tempo_nonce_key + lane), each lane sequential. 1 (default) is
+	// plain sequential nonces; >1 lets one owner issue parallel-eligible txs —
+	// with tx_shape=approve, the conflict workload on the allowance slot.
+	TempoNonceLanes int `yaml:"tempo_nonce_lanes"`
 	// Workload shape for the native generator: self (uncontended), hot (every
 	// sender writes one recipient's balance), noop (execution floor) or batch
 	// (several calls per transaction). Empty means the generator's default.

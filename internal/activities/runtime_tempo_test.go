@@ -224,6 +224,55 @@ func TestTempoProduceTxsForwardsShape(t *testing.T) {
 	}
 }
 
+// TestTempoProduceTxsMultiLane pins tempo_nonce_lanes: an account's txs spread
+// round-robin across lanes (nonce_key = base + lane), each lane sequential.
+// This is the conflict workload — one owner issuing parallel-eligible txs.
+func TestTempoProduceTxsMultiLane(t *testing.T) {
+	dir := t.TempDir()
+	spec := tempoNativeSpec()
+	spec.NumAccounts = 1
+	spec.NumTxs = 3
+	spec.TempoNonceLanes = 2
+	txPath := filepath.Join(dir, "txs.json")
+
+	if _, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: 0}, txPath); err != nil {
+		t.Fatalf("ProduceTxs: %v", err)
+	}
+	var raws []string
+	if err := readJSON(txPath, &raws); err != nil {
+		t.Fatalf("read txs: %v", err)
+	}
+	if len(raws) != 3 {
+		t.Fatalf("want 3 txs, got %d", len(raws))
+	}
+
+	key, err := keygen.DeterministicKey(0, 1, spec.BaseMnemonic)
+	if err != nil {
+		t.Fatalf("derive key: %v", err)
+	}
+	self := crypto.PubkeyToAddress(key.PublicKey)
+	token := common.HexToAddress(tempoDefaultFeeToken)
+	mk := func(nonceKey, nonce uint64) string {
+		raw, err := (&tempotx.Tx{
+			ChainID: 1337, MaxPriorityFeePerGas: 1000000000, MaxFeePerGas: 40000000000,
+			GasLimit: 300000, NonceKey: nonceKey, Nonce: nonce, FeeToken: token,
+			Calls: []tempotx.Call{{To: token, Data: tempotx.Transfer(self, 1)}},
+		}).SignedRaw(key)
+		if err != nil {
+			t.Fatalf("build expected tx: %v", err)
+		}
+		return raw
+	}
+	// tx0 -> lane0 (nk 0, nonce 0); tx1 -> lane1 (nk 1, nonce 0);
+	// tx2 -> lane0 again (nk 0, nonce 1).
+	want := []string{mk(0, 0), mk(1, 0), mk(0, 1)}
+	for i := range want {
+		if raws[i] != want[i] {
+			t.Errorf("tx %d does not match expected lane/nonce assignment", i)
+		}
+	}
+}
+
 // TestGenerateTxsUsesProducerAndFallsBack pins the txProducer wiring in both
 // directions. If native delegation broke, Tempo runs would silently fall back
 // to legacy transactions; if the fallback broke, every cosmos run would fail.

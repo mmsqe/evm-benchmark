@@ -65,6 +65,10 @@ func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, ta
 	if shape == "batch" && batchCalls < 1 {
 		return nil, fmt.Errorf("tempo_batch_calls must be >= 1 (got %d)", batchCalls)
 	}
+	lanes := spec.TempoNonceLanes
+	if lanes < 1 {
+		lanes = 1
+	}
 
 	token := common.HexToAddress(tempoDefaultFeeToken)
 	if spec.ERC20ContractAddress != "" {
@@ -104,8 +108,15 @@ func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, ta
 			recipient = hotRecipient
 		}
 
+		// Spread the account's transactions round-robin across `lanes` 2D-nonce
+		// lanes (nonce_key = base + lane), each lane with its own sequential
+		// nonce. One lane (the default) reproduces plain sequential nonces; many
+		// lanes let a single owner issue parallel-eligible transactions — with
+		// tx_shape=approve they all write the same exact-checked allowance slot,
+		// which is the workload that can conflict under optimistic execution.
+		laneNonce := make([]uint64, lanes)
 		raws := make([]string, spec.NumTxs)
-		for nonce := 0; nonce < spec.NumTxs; nonce++ {
+		for i := 0; i < spec.NumTxs; i++ {
 			r := recipient
 			if shape == "fresh" {
 				fresh, err := crypto.GenerateKey()
@@ -114,21 +125,23 @@ func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, ta
 				}
 				r = crypto.PubkeyToAddress(fresh.PublicKey)
 			}
+			lane := i % lanes
 			tx := &tempotx.Tx{
 				ChainID:              uint64(spec.EVMChainID),
 				MaxPriorityFeePerGas: uint64(spec.TempoMaxPriorityFeePerGas),
 				MaxFeePerGas:         uint64(spec.GasPriceWei),
 				GasLimit:             spec.ERC20TransferGas,
-				NonceKey:             uint64(spec.TempoNonceKey),
-				Nonce:                uint64(nonce),
+				NonceKey:             uint64(spec.TempoNonceKey) + uint64(lane),
+				Nonce:                laneNonce[lane],
 				FeeToken:             feeToken,
 				Calls:                buildTempoCalls(shape, token, r, batchCalls),
 			}
 			raw, err := tx.SignedRaw(key)
 			if err != nil {
-				return nil, fmt.Errorf("sign account %d nonce %d: %w", accountIdx, nonce, err)
+				return nil, fmt.Errorf("sign account %d tx %d: %w", accountIdx, i, err)
 			}
-			raws[nonce] = raw
+			raws[i] = raw
+			laneNonce[lane]++
 		}
 		return raws, nil
 	}
