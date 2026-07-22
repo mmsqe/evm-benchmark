@@ -46,12 +46,32 @@ benchmark:
   tempo_epoch_length: 100
   tempo_gas_limit: 3000000000
 
+  # Extra flags appended to every `tempo node` launcher (see config.tempo.yaml).
+  # Raising the per-block build budget also needs wait-for-proposal /
+  # wait-for-notarizations raised above target-block-time, or consensus stalls
+  # at height 0 — doubly important here with real multi-validator BFT.
+  # tempo_node_args:
+  #   - --consensus.target-block-time
+  #   - 2s
+  #   - --consensus.wait-for-proposal
+  #   - 4s
+  #   - --consensus.wait-for-notarizations
+  #   - 4s
+
   evm_chain_id: 1337
   base_mnemonic: "test test test test test test test test test test test junk"
 
   # Native 0x76 transactions, signed in-process (the default).
   tempo_max_priority_fee_per_gas: 1000000000
   tempo_nonce_key: 0
+  # Spread each account's txs across N nonce lanes; with num_accounts: 1 and
+  # tempo_tx_shape: approve this is the conflict workload (see config.tempo.yaml).
+  # tempo_nonce_lanes: 8
+
+  # Workload shape — see config.tempo.yaml for the list (self is the default;
+  # swap = order-book DEX, needs erc20_transfer_gas >= 8000000).
+  # tempo_tx_shape: self
+  # tempo_batch_calls: 4   # only used by tempo_tx_shape: batch
 
   tx_type: erc20-transfer
   erc20_contract_address: "0x20c0000000000000000000000000000000000000"

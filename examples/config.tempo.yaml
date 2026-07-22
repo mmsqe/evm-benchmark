@@ -69,7 +69,7 @@ benchmark:
   # lane). 1 = sequential. With num_accounts: 1 and tempo_tx_shape: approve, a
   # high lane count makes one owner issue parallel-eligible approves that all
   # write the same allowance slot — the conflict workload.
-  tempo_nonce_lanes: 1
+  # tempo_nonce_lanes: 8
   # Workload shape (state which one a number came from):
   #   self/hot   - uncontended / one shared recipient's balance slot
   #   noop       - the execution floor
@@ -83,8 +83,8 @@ benchmark:
   #   swap       - order-book DEX: each account seeds a bid/ask wall then swaps
   #                ALPHA/PATH against the shared book (needs erc20_transfer_gas
   #                >= 8000000; walls reach ~3.3M gas)
-  tempo_tx_shape: batch
-  tempo_batch_calls: 16   # only used by tempo_tx_shape: batch
+  tempo_tx_shape: self
+  # tempo_batch_calls: 4   # only used by tempo_tx_shape: batch
 
   # Tempo rejects native value transfers ("value transfer not allowed"), so the
   # workload is a TIP-20 transfer. The default target is the genesis fee token
@@ -94,7 +94,7 @@ benchmark:
   # Must exceed the per-shape gas floor or every tx is rejected up front:
   # ~272k (self/hot/noop/memo), ~320k (multitoken/approve_transfer),
   # ~550k (fresh/approve).
-  erc20_transfer_gas: 412000
+  erc20_transfer_gas: 300000
   # Signed as max_fee_per_gas for native txs; base fee rose to ~8 gwei under
   # load in earlier runs, so keep meaningful headroom.
   gas_price_wei: 40000000000
@@ -102,8 +102,8 @@ benchmark:
   # benchmark shape
   validators: 1
   fullnodes: 0
-  num_accounts: 2000
-  num_txs: 100
+  num_accounts: 500
+  num_txs: 40
   num_idle: 20
   broadcast_concurrency: 32
 
