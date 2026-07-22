@@ -1,6 +1,7 @@
 package activities
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -344,8 +345,13 @@ func patchTempoGenesis(genesisPath string, patch map[string]interface{}) error {
 	if err != nil {
 		return fmt.Errorf("read genesis for patch: %w", err)
 	}
+	// Decode with UseNumber so integers beyond float64's exact range (token
+	// balances reach 2**64-1) survive the round-trip verbatim instead of being
+	// mangled into scientific notation.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var doc map[string]interface{}
-	if err := json.Unmarshal(raw, &doc); err != nil {
+	if err := dec.Decode(&doc); err != nil {
 		return fmt.Errorf("decode genesis: %w", err)
 	}
 	merged := deepMergeJSON(doc, patch)

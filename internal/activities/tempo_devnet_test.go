@@ -1,6 +1,8 @@
 package activities
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -201,6 +203,32 @@ func TestTempoXtaskGenesisArgs(t *testing.T) {
 	got = strings.Join(tempoXtaskGenesisArgs(overridden, "x"), " ")
 	if !strings.Contains(got, "--epoch-length 50") || !strings.Contains(got, "--gas-limit 3000000000") {
 		t.Errorf("overrides not honoured: %q", got)
+	}
+}
+
+func TestPatchTempoGenesisPreservesLargeInts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "genesis.json")
+	orig := `{"alloc":{"0xabc":{"balance":18446744073709551615}},"config":{"chainId":1337,"keep":true}}`
+	if err := os.WriteFile(path, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	patch := map[string]interface{}{
+		"config": map[string]interface{}{"chainId": 9999},
+	}
+	if err := patchTempoGenesis(path, patch); err != nil {
+		t.Fatalf("patchTempoGenesis: %v", err)
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "18446744073709551615") {
+		t.Errorf("large balance corrupted (scientific notation?):\n%s", got)
+	}
+	if !strings.Contains(got, "9999") || !strings.Contains(got, `"keep": true`) {
+		t.Errorf("patch merge wrong (want chainId 9999, keep true):\n%s", got)
 	}
 }
 
