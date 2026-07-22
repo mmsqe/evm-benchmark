@@ -216,22 +216,27 @@ var (
 const (
 	tempoDexWallAmount = uint64(1_000_000_000_000) // 1e12 per wall
 	tempoDexSwapAmount = uint64(100_000_000)       // 1e8 per swap
+	// tempoDexSwapsPerWall re-seeds a fresh bid/ask wall every this many swaps so
+	// liquidity is replenished faster than swaps can drain it on a long run
+	// (1e12/1e8 = 1e4 swaps would drain a wall; 50 leaves a large margin).
+	tempoDexSwapsPerWall = 50
 )
 
 // buildTempoCalls returns the calls[] for transaction txIndex of the given shape.
 func buildTempoCalls(shape string, txIndex int, token, recipient common.Address, batchCalls int) []tempotx.Call {
 	switch shape {
 	case "swap":
-		// tx 0/1 seed a bid and an ask wall; the rest swap, alternating direction
-		// (even: sell base for quote against bids; odd: buy base with quote
-		// against asks). minAmountOut 0 keeps them from reverting on price.
+		// Each cycle re-seeds a bid then an ask wall (pos 0/1) and then swaps,
+		// alternating direction (even: sell base for quote against bids; odd: buy
+		// base with quote against asks). minAmountOut 0 keeps swaps from reverting
+		// on price; the periodic walls keep the shared book from depleting.
 		dex := tempotx.StablecoinDEXAddress
-		switch {
-		case txIndex == 0:
+		switch pos := txIndex % (2 + tempoDexSwapsPerWall); {
+		case pos == 0:
 			return []tempotx.Call{{To: dex, Data: tempotx.PlaceFlip(tempoDexBase, tempoDexWallAmount, true, -100, 100)}}
-		case txIndex == 1:
+		case pos == 1:
 			return []tempotx.Call{{To: dex, Data: tempotx.PlaceFlip(tempoDexBase, tempoDexWallAmount, false, 100, -100)}}
-		case txIndex%2 == 0:
+		case pos%2 == 0:
 			return []tempotx.Call{{To: dex, Data: tempotx.SwapExactAmountIn(tempoDexBase, tempoDexQuote, tempoDexSwapAmount, 0)}}
 		default:
 			return []tempotx.Call{{To: dex, Data: tempotx.SwapExactAmountIn(tempoDexQuote, tempoDexBase, tempoDexSwapAmount, 0)}}

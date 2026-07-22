@@ -326,6 +326,39 @@ func TestTempoProduceTxsSwapShape(t *testing.T) {
 	}
 }
 
+// TestTempoProduceTxsSwapReplenishes pins the wall-replenish cycle: fresh bid/ask
+// walls are re-seeded every tempoDexSwapsPerWall swaps so a long run cannot
+// deplete the book (re-seeded walls verified to mine with status 0x1 on-chain).
+func TestTempoProduceTxsSwapReplenishes(t *testing.T) {
+	dir := t.TempDir()
+	spec := tempoNativeSpec()
+	spec.NumAccounts = 1
+	spec.NumTxs = 2 + tempoDexSwapsPerWall + 4 // cross one cycle boundary
+	spec.TempoTxShape = "swap"
+	spec.ERC20TransferGas = 8000000
+	txPath := filepath.Join(dir, "txs.json")
+
+	if _, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: 0}, txPath); err != nil {
+		t.Fatalf("ProduceTxs: %v", err)
+	}
+	var raws []string
+	if err := readJSON(txPath, &raws); err != nil {
+		t.Fatalf("read txs: %v", err)
+	}
+	const placeSel, swapSel = "922828f1", "f8856c0f" // placeFlip / swapExactAmountIn selectors
+	wall := 2 + tempoDexSwapsPerWall
+	for _, i := range []int{0, 1, wall, wall + 1} { // walls at each cycle start
+		if !strings.Contains(raws[i], placeSel) {
+			t.Errorf("tx %d should be a placeFlip wall", i)
+		}
+	}
+	for _, i := range []int{2, wall - 1, wall + 2, wall + 3} { // swaps fill the rest
+		if !strings.Contains(raws[i], swapSel) {
+			t.Errorf("tx %d should be a swap", i)
+		}
+	}
+}
+
 // TestGenerateTxsUsesProducerAndFallsBack pins the txProducer wiring in both
 // directions. If native delegation broke, Tempo runs would silently fall back
 // to legacy transactions; if the fallback broke, every cosmos run would fail.
