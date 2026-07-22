@@ -59,6 +59,10 @@ type BenchmarkSpec struct {
 	TempoBasePort    int    `yaml:"tempo_base_port"`
 	TempoEpochLength int    `yaml:"tempo_epoch_length"`
 	TempoGasLimit    int64  `yaml:"tempo_gas_limit"`
+	// Extra flags appended verbatim to every generated `tempo node` launcher.
+	// Use to tune consensus knobs the benchmark does not model, e.g. raising the
+	// per-block build budget with ["--consensus.target-block-time", "2s"].
+	TempoNodeArgs []string `yaml:"tempo_node_args"`
 
 	// Native (0x76) transaction generation. Tempo's native envelope is signed
 	// in-process (internal/tempotx) and is the default. Set TempoLegacyTxs to

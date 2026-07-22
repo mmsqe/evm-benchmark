@@ -25,7 +25,7 @@ var (
 // newline, no `set -eu`) must match what `tempo node` was verified to accept.
 func TestTempoRunScriptLocalFormat(t *testing.T) {
 	args := tempoNodeArgs(8006, "127.0.0.1", "127.0.0.1", "0.0.0.0",
-		tempoLocalTrustedPeers(twoLocalVals, fixedIdentities), false)
+		tempoLocalTrustedPeers(twoLocalVals, fixedIdentities), false, nil)
 	got := tempoRunScript("/opt/tempo", args, false)
 
 	want := `#!/bin/sh
@@ -84,7 +84,7 @@ exec '/opt/tempo' \
 // the OTHER validators by service name, and ends with the bootnodes override.
 func TestTempoRunScriptDockerFormat(t *testing.T) {
 	args := tempoNodeArgs(tempoDockerConsensusPort, "0.0.0.0", "0.0.0.0", "0.0.0.0",
-		tempoDockerTrustedPeers(twoLocalVals, fixedIdentities, 0), true)
+		tempoDockerTrustedPeers(twoLocalVals, fixedIdentities, 0), true, nil)
 	got := tempoRunScript("tempo", args, true)
 
 	want := `#!/bin/sh
@@ -139,6 +139,26 @@ exec 'tempo' \
 `
 	if got != want {
 		t.Errorf("docker run.sh mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// TestTempoNodeArgsAppendsExtra pins tempo_node_args: extra flags are appended
+// verbatim after the built-in ones (last, so they can override a default), which
+// is how an operator raises the per-block build budget via
+// --consensus.target-block-time to probe the ~5,000-tx cap.
+func TestTempoNodeArgsAppendsExtra(t *testing.T) {
+	extra := []string{"--consensus.target-block-time", "2s"}
+
+	local := tempoNodeArgs(8000, "127.0.0.1", "127.0.0.1", "0.0.0.0", nil, false, extra)
+	if n := len(local); local[n-2] != extra[0] || local[n-1] != extra[1] {
+		t.Errorf("extra args not appended last (local): %v", local[len(local)-3:])
+	}
+
+	// Docker: extra flags stay last, after the bootnodes override.
+	docker := tempoNodeArgs(8000, "0.0.0.0", "0.0.0.0", "0.0.0.0", nil, true, extra)
+	if !strings.Contains(strings.Join(docker, " "),
+		"--tempo.bootnodes-endpoint none --consensus.target-block-time 2s") {
+		t.Errorf("expected bootnodes before extra args: %v", docker)
 	}
 }
 

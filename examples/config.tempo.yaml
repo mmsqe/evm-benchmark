@@ -37,6 +37,14 @@ benchmark:
   # deliberately and report it alongside any result.
   tempo_gas_limit: 3000000000
 
+  # Extra flags appended to every `tempo node` launcher. Blocks cap near ~5,000
+  # txs well under the gas limit because the proposer builds for a time budget
+  # (consensus.target-block-time - consensus.network-budget, ~500ms by default);
+  # raise the budget to pack more per block:
+  # tempo_node_args:
+  #   - --consensus.target-block-time
+  #   - 2s
+
   evm_chain_id: 1337
   # Must match the devnet mnemonic: the benchmark signs from
   # m/44'/60'/0'/0/{1..num_accounts}, which tempo-xtask funds from index 0.
