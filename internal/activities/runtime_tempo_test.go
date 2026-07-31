@@ -66,7 +66,7 @@ func TestTempoBootstrap(t *testing.T) {
 	}
 	for _, node := range nodes {
 		for _, name := range []string{"run.sh", "signing.key", "enode.key"} {
-			path := filepath.Join(tempoNodeHome(spec, node.GlobalSeq), name)
+			path := filepath.Join(devnetNodeHome(spec, node.GlobalSeq), name)
 			if _, err := os.Stat(path); err != nil {
 				t.Errorf("node %d is missing %s: %v", node.GlobalSeq, name, err)
 			}

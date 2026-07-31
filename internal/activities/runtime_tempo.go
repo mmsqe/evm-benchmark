@@ -5,12 +5,10 @@ import (
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/mmsqe/evm-benchmark/internal/bench"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
@@ -34,6 +32,13 @@ const (
 	// below is rejected with "call gas cost exceeds the gas limit".
 	tempoMinTxGas = 272000
 )
+
+// tempoPorts is Tempo's per-node port allocation.
+var tempoPorts = portBlock{
+	defaultBase: defaultTempoBasePort,
+	size:        tempoPortsPerNode,
+	rpcOffset:   tempoHTTPPortOffset,
+}
 
 // tempoShapeMinGas is the measured per-transaction gas floor for shapes that
 // cost more than a plain transfer, so a config can be rejected
@@ -105,16 +110,8 @@ func (t tempoRuntime) Bootstrap(ctx context.Context, spec messages.BenchmarkSpec
 		// A missing compose file on the first run is expected, so a failure
 		// here is not fatal.
 		_, _ = chainCmd(ctx, "docker", nil, tempoComposeArgs(spec, "down", "-t", "5")...)
-	} else {
-		// A node left over from an earlier run keeps serving its own (stale)
-		// genesis on the same port. Load would then silently measure that chain
-		// instead of the one generated here, so refuse to continue.
-		for _, node := range nodes {
-			port := t.EVMRPCPort(spec, node.GlobalSeq)
-			if err := assertPortFree(port); err != nil {
-				return err
-			}
-		}
+	} else if err := assertRPCPortsFree(t, spec, nodes); err != nil {
+		return err
 	}
 
 	// Generate genesis, keys and per-node launchers in-process (see
@@ -210,7 +207,7 @@ func (t tempoRuntime) PreStartCheck(spec messages.BenchmarkSpec, target messages
 		// is expected to already be listening.
 		return nil
 	}
-	return assertPortFree(t.EVMRPCPort(spec, target.GlobalSeq))
+	return assertRPCPortsFree(t, spec, []messages.NodeTarget{target})
 }
 
 // HasConsensusRPC reports false: Tempo exposes no CometBFT-style RPC, so node
@@ -219,48 +216,18 @@ func (tempoRuntime) HasConsensusRPC() bool { return false }
 
 // EVMRPCPort returns the node's HTTP JSON-RPC port from its port block.
 func (tempoRuntime) EVMRPCPort(spec messages.BenchmarkSpec, globalSeq int) int {
-	return tempoBasePort(spec, globalSeq) + tempoHTTPPortOffset
+	return tempoPorts.rpc(spec.TempoBasePort, globalSeq)
 }
 
 // LocalStartCommand runs the launcher generated for the node (see
-// tempoRunScript); it resolves its own relative paths, so it must run from the
-// node home.
+// tempoRunScript).
 func (tempoRuntime) LocalStartCommand(spec messages.BenchmarkSpec, target messages.NodeTarget) ([]string, string) {
-	home := tempoNodeHome(spec, target.GlobalSeq)
-	return []string{filepath.Join(home, "run.sh")}, home
+	return devnetLaunchCommand(spec, target)
 }
 
-// tempoBasePort returns the base of a node's 6-port block. Node targets are
-// addressed on their HTTP JSON-RPC port, which sits at offset 4.
+// tempoBasePort returns the base of a node's 6-port block.
 func tempoBasePort(spec messages.BenchmarkSpec, globalSeq int) int {
-	base := spec.TempoBasePort
-	if base == 0 {
-		base = defaultTempoBasePort
-	}
-	return base + globalSeq*tempoPortsPerNode
-}
-
-func tempoMoniker(globalSeq int) string {
-	return fmt.Sprintf("node%d", globalSeq)
-}
-
-// tempoNodeHome is the per-node directory generateTempoDevnet creates.
-func tempoNodeHome(spec messages.BenchmarkSpec, globalSeq int) string {
-	return filepath.Join(spec.DataDir, "devnet", tempoMoniker(globalSeq))
-}
-
-// assertPortFree fails when something already listens on the node's JSON-RPC
-// port, which would otherwise be mistaken for a healthy freshly-started node.
-func assertPortFree(port int) error {
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
-	if err != nil {
-		return nil // nothing listening: the port is ours to use
-	}
-	_ = conn.Close()
-	return fmt.Errorf(
-		"port %d is already in use: a node from a previous run is still serving its own genesis; "+
-			"stop it first (e.g. scripts/run-benchmark.sh --mode tempo stop)", port)
+	return tempoPorts.base(spec.TempoBasePort, globalSeq)
 }
 
 // ProducesTxs reports whether the runtime signs the node's transactions itself.

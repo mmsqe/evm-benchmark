@@ -83,9 +83,30 @@ type BenchmarkSpec struct {
 	// Docker mode: the devnet is generated with a compose file and the whole
 	// cluster is started by `docker compose up`, rather than one container per
 	// node as the cosmos runner does.
-	TempoDockerImage        string   `yaml:"tempo_docker_image"`
-	TempoDockerNetwork      string   `yaml:"tempo_docker_network"`
-	TempoComposeProject     string   `yaml:"tempo_compose_project"`
+	TempoDockerImage    string `yaml:"tempo_docker_image"`
+	TempoDockerNetwork  string `yaml:"tempo_docker_network"`
+	TempoComposeProject string `yaml:"tempo_compose_project"`
+
+	// Allegro-family settings (chain_family: allegro). Allegro embeds a reth
+	// execution node inside a commonware simplex consensus engine, so it speaks
+	// plain EVM JSON-RPC and the shared signer/stats path applies unchanged; the
+	// network is generated with `allegro-xtask genesis`.
+	AllegroBin      string `yaml:"allegro_bin"`
+	AllegroXtaskBin string `yaml:"allegro_xtask_bin"`
+	// Base of each node's 4-port block (consensus p2p, execution p2p, authrpc,
+	// http). Node N's JSON-RPC is at base + N*4 + 3.
+	AllegroBasePort int `yaml:"allegro_base_port"`
+	// Per-block gas budget, written to genesis and pinned as the builder target.
+	// It caps a block at gas_limit/21000 transfers, so it bounds TPS directly —
+	// set it deliberately and report it alongside any result. 0 keeps
+	// allegro-xtask's own default (30M).
+	AllegroGasLimit        int64 `yaml:"allegro_gas_limit"`
+	AllegroLeaderTimeoutMS int   `yaml:"allegro_leader_timeout_ms"`
+	AllegroCertTimeoutMS   int   `yaml:"allegro_cert_timeout_ms"`
+	// Extra flags appended verbatim to every generated `allegro node` launcher,
+	// e.g. ["--builder.interval", "200ms"].
+	AllegroNodeArgs []string `yaml:"allegro_node_args"`
+
 	MinReadyHeight          int64    `yaml:"min_ready_height"`
 	PeerReadyTimeoutSeconds int      `yaml:"peer_ready_timeout_seconds"`
 	PreGenerateTxs          bool     `yaml:"pre_generate_txs"`

@@ -167,6 +167,113 @@ unconditionally.
 
 See `plan.md` for measured Tempo characteristics and results.
 
+## Allegro Mode
+
+Benchmarks an [Allegro](https://github.com/yihuang/allegro) devnet — a Reth
+execution node embedded in a Commonware simplex consensus engine — with the same
+generator and stats used for the other chains, so results are comparable.
+
+Allegro is a stock reth EVM behind consensus: it takes ordinary legacy/London
+transactions from the shared signer, accepts native value transfers, and charges
+the usual 21,000 gas. Unlike Tempo, nothing about the transaction path is
+family-specific.
+
+### Prerequisites
+
+1. `allegro` and `allegro-xtask` on your `PATH` — `cargo install` them, or build
+   in the allegro repo (`cargo build --bin allegro --bin allegro-xtask`, add
+   `--release` for real runs) and point the config at the build. These are the
+   only external binaries: the devnet is generated in-process from
+   `allegro-xtask genesis`.
+2. The `temporal` CLI (the run script starts a dev server itself).
+
+### Run
+
+```bash
+scripts/run-benchmark.sh --mode allegro run
+```
+
+That stops any previous runtime, generates the devnet, pre-signs the
+transactions, starts the node, sends the load, and writes
+`/tmp/allegro-benchmark/output/node_0_block_stats.log`. Stop everything with
+`scripts/run-benchmark.sh --mode allegro stop`.
+
+As with Tempo, the line that matters is `tx_summary`: if `included` is far below
+`sent`, the run measured rejection (or an early stop — see the note on `num_idle`
+below), not throughput.
+
+### Configure
+
+`examples/config.allegro.yaml` resolves both binaries from your `PATH`. Override
+only to benchmark a specific build:
+
+```yaml
+allegro_bin:       /path/to/allegro/target/release/allegro
+allegro_xtask_bin: /path/to/allegro/target/release/allegro-xtask
+```
+
+Ports are allocated in blocks of 4 per node (consensus p2p, execution p2p,
+authrpc, http) from `allegro_base_port`, so node0 serves JSON-RPC on
+`http://127.0.0.1:9003` and node1 on `9007`. Those consensus sockets are baked
+into the generated genesis as the validator set, which is also how peers find
+each other — there is no separate peer list.
+
+Two settings decide what a number means:
+
+- `allegro_gas_limit` is written to genesis *and* pinned as the builder target.
+  At 21,000 gas per transfer it caps a block at `gas_limit/21000` transactions,
+  so report it alongside any result. Unset keeps allegro-xtask's 30M default
+  (~1,428 transfers per block).
+- `allegro_leader_timeout_ms` / `allegro_cert_timeout_ms` set the consensus block
+  cadence. Unset means the binary's own defaults (2000/4000).
+
+`allegro_node_args` is appended verbatim to every generated launcher, for flags
+the benchmark does not model (e.g. `--builder.interval 200ms`).
+
+### Funding
+
+`allegro-xtask` prefunds 20 anvil accounts on HD branch 0, while the generator
+signs from `m/44'/60'/{node}'/0/{1..num_accounts}`. The benchmark therefore adds
+every account it will sign from to the genesis `alloc` before the nodes start —
+without that, only the first 19 transactions of node 0 could ever pay. Verify
+against a running node (no fee token on allegro, so skip that check):
+
+```bash
+go run ./cmd/checkfunding -rpc http://127.0.0.1:9003 -chain-id 1337 -fee-token ""
+```
+
+### Sizing the run
+
+Allegro produces blocks far faster than the cosmos chains (tens per second at a
+1s leader timeout), and `num_idle` counts *blocks*, not seconds. A small value
+lets the run declare the chain idle within a fraction of a second of the last
+send — before the pool has been drained — and report `included=0` for a chain
+that was working fine. Keep the example's `num_idle: 40` (or raise it) and use a
+load large enough to span many blocks.
+
+The launcher also sizes reth's transaction pool from the spec
+(`--txpool.max-account-slots`, `--txpool.{pending,queued}-max-{count,size}`):
+the defaults hold 16 transactions per sender and 10,000 per sub-pool, so a
+benchmark load would otherwise be dropped at submission.
+
+### Constraints
+
+- `runner_type: docker` is rejected — there is no allegro image, and the cosmos
+  docker runner is cosmos-shaped.
+- `fullnodes` must be 0: every node in an allegro genesis validator set votes.
+- `tx_type: erc20-transfer` is rejected unless `erc20_contract_address` is set;
+  allegro genesis deploys no contracts, so a transfer to an empty account would
+  succeed while executing nothing.
+
+### Tests
+
+```bash
+ALLEGRO_XTASK_BIN=/path/to/allegro-xtask go test ./internal/activities -run Allegro
+```
+
+The devnet-bootstrapping test skips unless that is set; the rest (launcher
+format, pool sizing, funding-vs-signer agreement) runs unconditionally.
+
 ## Local Mode
 
 Use local mode when you do not want Docker node runtime.

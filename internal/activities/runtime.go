@@ -11,8 +11,9 @@ import (
 // Chain families supported by the benchmark. The family selects how a network
 // is bootstrapped and launched; the load path (internal/bench) is shared.
 const (
-	FamilyCosmos = "cosmos"
-	FamilyTempo  = "tempo"
+	FamilyCosmos  = "cosmos"
+	FamilyTempo   = "tempo"
+	FamilyAllegro = "allegro"
 )
 
 // ChainRuntime abstracts everything that differs between chain families:
@@ -75,6 +76,8 @@ func resolveRuntime(spec messages.BenchmarkSpec) (ChainRuntime, error) {
 		return cosmosRuntime{}, nil
 	case FamilyTempo:
 		return tempoRuntime{}, nil
+	case FamilyAllegro:
+		return allegroRuntime{}, nil
 	default:
 		return nil, fmt.Errorf("unknown chain_family %q", family)
 	}

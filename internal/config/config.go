@@ -94,6 +94,8 @@ func expandSpecPaths(spec *messages.BenchmarkSpec) {
 	spec.Binary = expandPath(spec.Binary)
 	spec.TempoBin = expandPath(spec.TempoBin)
 	spec.TempoXtaskBin = expandPath(spec.TempoXtaskBin)
+	spec.AllegroBin = expandPath(spec.AllegroBin)
+	spec.AllegroXtaskBin = expandPath(spec.AllegroXtaskBin)
 	spec.ChainsConfigPath = expandPath(spec.ChainsConfigPath)
 	spec.PatchImage.SourceDir = expandPath(spec.PatchImage.SourceDir)
 }

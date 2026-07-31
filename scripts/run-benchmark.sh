@@ -20,11 +20,13 @@ Commands:
   run        Stop runtime + prepare + start temporal + run worker/starter
 
 Options:
-  --mode <docker|local|tempo|tempo-docker>
+  --mode <docker|local|tempo|tempo-docker|allegro>
                           Runner mode (default: docker). "tempo" benchmarks a
                           Tempo devnet locally; "tempo-docker" runs the Tempo
                           validators as containers via docker compose (needs
-                          tempo-xtask on the host and a tempo image).
+                          tempo-xtask on the host and a tempo image);
+                          "allegro" benchmarks an Allegro devnet locally (needs
+                          allegro and allegro-xtask).
   --config <path>         Config file path
   --data-root <path>      Root path used by benchctl gen
   --chain-config <name>   CHAIN_CONFIG value (default: evmd)
@@ -45,6 +47,8 @@ Examples:
 
   scripts/run-benchmark.sh --mode tempo run
   scripts/run-benchmark.sh --mode tempo-docker run
+
+  scripts/run-benchmark.sh --mode allegro run
 USAGE
 }
 
@@ -114,9 +118,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 case "$MODE" in
-  docker|local|tempo|tempo-docker) ;;
+  docker|local|tempo|tempo-docker|allegro) ;;
   *)
-    echo "Invalid --mode: $MODE (expected docker, local, tempo or tempo-docker)"
+    echo "Invalid --mode: $MODE (expected docker, local, tempo, tempo-docker or allegro)"
     exit 1
     ;;
 esac
@@ -126,6 +130,7 @@ if [[ -z "$CONFIG" ]]; then
     docker) CONFIG="./examples/config.yaml" ;;
     tempo)  CONFIG="./examples/config.tempo.yaml" ;;
     tempo-docker) CONFIG="./examples/config.tempo.docker.yaml" ;;
+    allegro) CONFIG="./examples/config.allegro.yaml" ;;
     *)      CONFIG="./examples/config.local.yaml" ;;
   esac
 fi
@@ -136,12 +141,14 @@ if [[ -z "$DATA_ROOT" ]]; then
     tempo)  DATA_ROOT="/tmp/tempo-benchmark/data" ;;
     # Under $HOME so colima can bind-mount each node dir into its container.
     tempo-docker) DATA_ROOT="$HOME/tempo-benchmark-docker/data" ;;
+    allegro) DATA_ROOT="/tmp/allegro-benchmark/data" ;;
     *)      DATA_ROOT="/private/tmp/evm-benchmark-local/data" ;;
   esac
 fi
 
-# Chain profiles are cosmos-only; exporting one would override the tempo config.
-if [[ "$MODE" == tempo* ]]; then
+# Chain profiles are cosmos-only; exporting one would override the tempo /
+# allegro config.
+if [[ "$MODE" == tempo* || "$MODE" == allegro ]]; then
   unset CHAIN_CONFIG
 else
   export CHAIN_CONFIG
@@ -225,6 +232,7 @@ run_clean() {
   case "$MODE" in
     tempo) rm -rf /tmp/tempo-benchmark ;;
     tempo-docker) rm -rf "$HOME/tempo-benchmark-docker" ;;
+    allegro) rm -rf /tmp/allegro-benchmark ;;
   esac
 }
 
@@ -296,6 +304,10 @@ stop_runtime() {
     # Tempo nodes are launched from the generated per-node run.sh wrapper.
     tempo) terminate_matching_processes "tempo-benchmark/data/devnet" 8 ;;
     tempo-docker) cleanup_tempo_compose ;;
+    # The allegro launcher cd's into the node home and passes relative paths,
+    # so the data dir never reaches the command line; match the launched
+    # command instead.
+    allegro) terminate_matching_processes "allegro node --chain" 8 ;;
   esac
   log_step "stop: runtime cleanup complete"
 }
