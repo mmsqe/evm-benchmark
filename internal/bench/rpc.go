@@ -65,12 +65,25 @@ func JSONRPCCall(ctx context.Context, client *http.Client, url, method string, p
 	return nil
 }
 
-func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, txs []string, concurrency int) {
+// DefaultPendingWatermark is how many pending transactions the sender will let
+// pile up before it pauses. It exists to keep a slow chain's mempool from
+// overflowing, but it also caps how deep a backlog a chain is ever given: a
+// chain that drains faster than the sender refills is then measured on the
+// sender's loop, not its own execution. Benchmarks comparing chains of
+// different speeds should raise it past the whole load so it never binds —
+// see broadcast_pending_watermark.
+const DefaultPendingWatermark = int64(5000)
+
+// BroadcastRawTxs sends every transaction, pausing while more than watermark
+// are pending (watermark <= 0 uses DefaultPendingWatermark).
+func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, txs []string, concurrency int, watermark int64) {
 	if concurrency < 1 {
 		concurrency = 1
 	}
+	if watermark <= 0 {
+		watermark = DefaultPendingWatermark
+	}
 
-	const txpoolHighWatermark = int64(5000)
 	const txpoolBackoff = 100 * time.Millisecond
 
 	jobs := make(chan string)
@@ -82,7 +95,7 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 			for raw := range jobs {
 				for {
 					pending, err := TxPoolPendingCount(ctx, client, rpcURL)
-					if err == nil && pending > txpoolHighWatermark {
+					if err == nil && pending > watermark {
 						select {
 						case <-ctx.Done():
 							return

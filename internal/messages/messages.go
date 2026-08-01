@@ -107,14 +107,19 @@ type BenchmarkSpec struct {
 	// e.g. ["--builder.interval", "200ms"].
 	AllegroNodeArgs []string `yaml:"allegro_node_args"`
 
-	MinReadyHeight          int64    `yaml:"min_ready_height"`
-	PeerReadyTimeoutSeconds int      `yaml:"peer_ready_timeout_seconds"`
-	PreGenerateTxs          bool     `yaml:"pre_generate_txs"`
-	RunNodes                bool     `yaml:"run_nodes"`
-	ValidatorGenerateLoad   bool     `yaml:"validator_generate_load"`
-	BroadcastConcurrency    int      `yaml:"broadcast_concurrency"`
-	StartNode               bool     `yaml:"start_node"`
-	StartArgs               []string `yaml:"start_args"`
+	MinReadyHeight          int64 `yaml:"min_ready_height"`
+	PeerReadyTimeoutSeconds int   `yaml:"peer_ready_timeout_seconds"`
+	PreGenerateTxs          bool  `yaml:"pre_generate_txs"`
+	RunNodes                bool  `yaml:"run_nodes"`
+	ValidatorGenerateLoad   bool  `yaml:"validator_generate_load"`
+	BroadcastConcurrency    int   `yaml:"broadcast_concurrency"`
+	// Pause sending while more than this many transactions are pending. 0 uses
+	// bench.DefaultPendingWatermark (5000). Raise past num_accounts*num_txs so
+	// the sender never throttles — otherwise a chain that drains faster than
+	// the sender refills is measured on the sender, not on itself.
+	BroadcastPendingWatermark int64    `yaml:"broadcast_pending_watermark"`
+	StartNode                 bool     `yaml:"start_node"`
+	StartArgs                 []string `yaml:"start_args"`
 }
 
 type PatchImageConfig struct {
@@ -191,9 +196,14 @@ type TPSDetail struct {
 }
 
 type NodeRunResult struct {
-	GlobalSeq     int
-	TxsSent       int
-	IncludedTxs   int
+	GlobalSeq   int
+	TxsSent     int
+	IncludedTxs int
+	// SustainedTPS is every included transaction over ActiveSeconds, the
+	// seconds of block production that carried the load. A run with few active
+	// seconds is bounded by the load, not the chain — quote it with that count.
+	SustainedTPS  float64
+	ActiveSeconds int
 	PendingTxpool int64
 	TopTPS        []float64
 	TopTPSDetails []TPSDetail

@@ -685,7 +685,7 @@ func doRun(
 		}
 	}
 
-	bench.BroadcastRawTxs(ctx, client, rpcURL, txs, spec.BroadcastConcurrency)
+	bench.BroadcastRawTxs(ctx, client, rpcURL, txs, spec.BroadcastConcurrency, spec.BroadcastPendingWatermark)
 
 	if err := bench.DetectIdleOrHalt(
 		ctx,
@@ -715,14 +715,22 @@ func doRun(
 	}
 	defer statsFile.Close()
 
-	topTPSPoints, includedTxs, err := bench.DumpBlockStats(ctx, statsFile, client, rpcURL, 2, end, len(txs))
+	stats, err := bench.DumpBlockStats(ctx, statsFile, client, rpcURL, 2, end, len(txs))
 	if err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("dump block stats: %w", err)
 	}
+	if stats.TooShort() {
+		logger.Warn(
+			"load drained too fast to measure a rate; raise num_accounts*num_txs",
+			"node", target.GlobalSeq,
+			"active_seconds", stats.ActiveSeconds,
+			"txs_sent", len(txs),
+		)
+	}
 
-	topTPS := make([]float64, 0, len(topTPSPoints))
-	topTPSDetails := make([]messages.TPSDetail, 0, len(topTPSPoints))
-	for _, p := range topTPSPoints {
+	topTPS := make([]float64, 0, len(stats.Peaks))
+	topTPSDetails := make([]messages.TPSDetail, 0, len(stats.Peaks))
+	for _, p := range stats.Peaks {
 		topTPS = append(topTPS, p.TPS)
 		topTPSDetails = append(topTPSDetails, messages.TPSDetail{
 			Height: p.Height,
@@ -742,7 +750,9 @@ func doRun(
 	return messages.NodeRunResult{
 		GlobalSeq:     target.GlobalSeq,
 		TxsSent:       len(txs),
-		IncludedTxs:   includedTxs,
+		IncludedTxs:   stats.IncludedTxs,
+		SustainedTPS:  stats.SustainedTPS,
+		ActiveSeconds: stats.ActiveSeconds,
 		PendingTxpool: pendingTxpool,
 		TopTPS:        topTPS,
 		TopTPSDetails: topTPSDetails,
