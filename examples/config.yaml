@@ -39,6 +39,8 @@ benchmark:
   config_patch:
     log_level: info
     mempool:
+      # type "app" hands the mempool to the EVM app, so this size is inert —
+      # the capacity that matters is app_patch.evm.mempool below.
       type: "app"
       size: 50000
     consensus:
@@ -47,6 +49,13 @@ benchmark:
     evm:
       mempool:
         "operate-exclusively": true
+        # Sized to hold the whole load; the defaults hold ~6k transactions, so
+        # the rest is dropped and the run measures rejection. See "Measuring".
+        "global-slots": 400000
+        "global-queue": 400000
+        "account-slots": 40
+        "account-queue": 40
+        "insert-queue-size": "50000"
     json-rpc:
       api: eth,net,web3,txpool
   genesis_patch:
@@ -63,6 +72,8 @@ benchmark:
   num_idle: 20
   # cap concurrent eth_sendRawTransaction requests to avoid exhausting local sockets
   broadcast_concurrency: 32
+  # Above num_accounts * num_txs so the sender never pauses. See "Measuring".
+  broadcast_pending_watermark: 400000
 
   # workflow behavior
   # when true, starter loads existing data_dir/nodes.json and will NOT regenerate node homes/genesis

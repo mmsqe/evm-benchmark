@@ -47,10 +47,23 @@ benchmark:
   tempo_gas_limit: 3000000000
 
   # Extra flags appended to every `tempo node` launcher (see config.tempo.yaml).
-  # Raising the per-block build budget also needs wait-for-proposal /
-  # wait-for-notarizations raised above target-block-time, or consensus stalls
+  # The pool is sized to hold each node's load: the default 16 slots per sender
+  # caps the ready set near 5,000 and with it the transactions per block.
+  tempo_node_args:
+    - --txpool.max-account-slots
+    - "100"
+    - --txpool.pending-max-count
+    - "100000"
+    - --txpool.queued-max-count
+    - "100000"
+    - --txpool.pending-max-size
+    - "256"
+    - --txpool.queued-max-size
+    - "256"
+
+  # Append to raise the per-block build budget. wait-for-proposal /
+  # wait-for-notarizations must go above target-block-time or consensus stalls
   # at height 0 — doubly important here with real multi-validator BFT.
-  # tempo_node_args:
   #   - --consensus.target-block-time
   #   - 2s
   #   - --consensus.wait-for-proposal
@@ -89,8 +102,11 @@ benchmark:
   # validator key).
   num_accounts: 500
   num_txs: 100
-  num_idle: 20
+  num_idle: 40
   broadcast_concurrency: 32
+  # Above the per-node load (num_accounts * num_txs) so the sender never pauses.
+  # See "Measuring" in the README.
+  broadcast_pending_watermark: 100000
 
   # workflow behavior
   skip_generate_layout: false

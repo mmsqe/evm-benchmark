@@ -19,8 +19,16 @@ func TestAllegroExampleConfigParses(t *testing.T) {
 	if b.AllegroBin == "" || b.AllegroXtaskBin == "" {
 		t.Errorf("allegro binaries not parsed: bin=%q xtask=%q", b.AllegroBin, b.AllegroXtaskBin)
 	}
-	if b.AllegroBasePort != 9000 || b.AllegroGasLimit != 1000000000 {
+	// 3e9 matches the tempo/evmd examples so gas is non-binding on all three
+	// (see "Comparing chains" in the README).
+	if b.AllegroBasePort != 9000 || b.AllegroGasLimit != 3000000000 {
 		t.Errorf("ports/gas not parsed: port=%d gas=%d", b.AllegroBasePort, b.AllegroGasLimit)
+	}
+	// The sender must not throttle, or a fast chain is measured on the
+	// generator's refill loop instead of its own execution.
+	if b.BroadcastPendingWatermark <= int64(b.NumAccounts*b.NumTxs) {
+		t.Errorf("broadcast_pending_watermark %d must exceed the load %d",
+			b.BroadcastPendingWatermark, b.NumAccounts*b.NumTxs)
 	}
 	if b.AllegroLeaderTimeoutMS != 1000 || b.AllegroCertTimeoutMS != 2000 {
 		t.Errorf("consensus timeouts not parsed: %d/%d", b.AllegroLeaderTimeoutMS, b.AllegroCertTimeoutMS)

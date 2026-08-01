@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -24,6 +25,16 @@ func TestTempoExampleConfigParses(t *testing.T) {
 	}
 	if b.TxType != "erc20-transfer" || b.ERC20TransferGas != 300000 {
 		t.Errorf("tx settings not parsed: %s %d", b.TxType, b.ERC20TransferGas)
+	}
+	// Held with the evmd/allegro examples so the three are comparable.
+	if b.BroadcastPendingWatermark <= int64(b.NumAccounts*b.NumTxs) {
+		t.Errorf("broadcast_pending_watermark %d must exceed the load %d",
+			b.BroadcastPendingWatermark, b.NumAccounts*b.NumTxs)
+	}
+	// The default 16 slots per sender caps the ready set near 5,000, which is
+	// where the "~5,000 txs/block" figure came from.
+	if !strings.Contains(strings.Join(b.TempoNodeArgs, " "), "--txpool.max-account-slots") {
+		t.Errorf("tempo pool not sized for the load: %v", b.TempoNodeArgs)
 	}
 	t.Logf("parsed OK: accounts=%d validators=%d", b.NumAccounts, b.Validators)
 }

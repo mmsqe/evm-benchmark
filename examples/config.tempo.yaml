@@ -50,6 +50,22 @@ benchmark:
   #   - --consensus.wait-for-notarizations
   #   - 4s
 
+  # Pool sized to hold the whole load. The default 16 executable slots per
+  # sender caps the ready set near 5,000, which is where the "~5,000 txs per
+  # block" figure came from — with a pool sized to the load, blocks carry
+  # ~12,500. Raise these with num_accounts * num_txs.
+  tempo_node_args:
+    - --txpool.max-account-slots
+    - "100"
+    - --txpool.pending-max-count
+    - "250000"
+    - --txpool.queued-max-count
+    - "250000"
+    - --txpool.pending-max-size
+    - "512"
+    - --txpool.queued-max-size
+    - "512"
+
   evm_chain_id: 1337
   # Must match the devnet mnemonic: the benchmark signs from
   # m/44'/60'/0'/0/{1..num_accounts}, which tempo-xtask funds from index 0.
@@ -102,10 +118,13 @@ benchmark:
   # benchmark shape
   validators: 1
   fullnodes: 0
-  num_accounts: 500
-  num_txs: 40
-  num_idle: 20
+  num_accounts: 2000
+  num_txs: 100
+  num_idle: 40
   broadcast_concurrency: 32
+  # See the allegro example: the default 5,000-pending pause caps the backlog
+  # and measures the sender rather than the chain.
+  broadcast_pending_watermark: 250000
 
   # workflow behavior
   start_node: true

@@ -22,6 +22,44 @@ Temporal-based stateless EVM load testing in Go.
 - `config/chains.jsonnet`: local chain profiles used by `benchmark.chain_config`.
 - `examples/config.yaml`: runnable config sample.
 
+## Measuring
+
+Every run writes `block_stats.log` (and echoes a summary line). Read it in this
+order:
+
+- `tx_summary sent=… included=… missing=…` — if `included` is far below `sent`
+  the run measured rejection, not throughput.
+- `tps_summary sustained=… median_second=… active_seconds=…` — rates are
+  transactions per whole second of block timestamps. `sustained` is every
+  included transaction over the active window; `top_tps` lists the busiest
+  seconds, one entry per second (so a *short* list means the chain drained the
+  load quickly, not that it was slow).
+- `tps_warning` — present when the load drained in under 5 seconds. The rate is
+  then bounded by `num_accounts * num_txs`, not by the chain; raise the load.
+
+Rates are bucketed per second rather than over a sliding window of blocks
+because block timestamps only have second resolution: a 5-block window spans
+~2s on a chain doing 2.5 blocks/s but ~0.3s on one doing 15, so dividing by the
+timestamp difference understates the fast chain ~3x and overstates the slow one.
+Numbers measured before this change are not comparable with numbers after it.
+
+Three settings decide whether a number means anything. All are set in the
+shipped examples:
+
+- **`broadcast_pending_watermark`** — the sender pauses while more than this
+  many transactions are pending (default 5,000). That caps how deep a backlog
+  the chain is ever given, so a chain that drains faster than the sender refills
+  ends up measuring the sender. Keep it above `num_accounts * num_txs`.
+- **Pool capacity** — must hold the whole load, or raising the watermark just
+  converts throttling into dropped transactions. reth-based chains (tempo,
+  allegro) default to 16 executable slots per sender; evmd's EVM mempool
+  defaults to `global-slots = 5120`, `global-queue = 1024`. On evmd note that
+  CometBFT's `mempool.size` is inert while `mempool.type = "app"` — the
+  capacities that matter live under `app_patch.evm.mempool`.
+- **`num_idle`** — counts *blocks* of no transactions before the run stops. On a
+  chain producing tens of blocks per second a cosmos-sized value ends the run
+  mid-drain.
+
 ## Docker Mode (default)
 
 Use `scripts/run-benchmark.sh` for the standard docker workflow.
@@ -82,18 +120,8 @@ transactions, starts the node, sends the load, and writes
 `scripts/run-benchmark.sh --mode tempo stop`.
 
 The line that matters is `tx_summary`: if `included` is far below `sent`, the
-run measured rejection, not throughput.
-
-### Scale the load
-
-The default (500 accounts x 40 txs) drains in about a second, which is too fast
-to measure. For a real number use a load large enough to span many blocks:
-
-```bash
-sed -e 's/num_accounts: 500/num_accounts: 2000/' -e 's/num_txs: 40/num_txs: 100/' \
-  examples/config.tempo.yaml > /tmp/config.tempo.large.yaml
-scripts/run-benchmark.sh --mode tempo --config /tmp/config.tempo.large.yaml run
-```
+run measured rejection, not throughput; `tps_summary` carries the rate. See
+[Measuring](#measuring).
 
 ### Transaction shape
 
@@ -170,13 +198,10 @@ See `plan.md` for measured Tempo characteristics and results.
 ## Allegro Mode
 
 Benchmarks an [Allegro](https://github.com/yihuang/allegro) devnet — a Reth
-execution node embedded in a Commonware simplex consensus engine — with the same
-generator and stats used for the other chains, so results are comparable.
-
-Allegro is a stock reth EVM behind consensus: it takes ordinary legacy/London
-transactions from the shared signer, accepts native value transfers, and charges
-the usual 21,000 gas. Unlike Tempo, nothing about the transaction path is
-family-specific.
+execution node embedded in a Commonware simplex consensus engine. It is a stock
+reth EVM behind consensus, so unlike Tempo nothing about the transaction path is
+family-specific: ordinary legacy/London transfers from the shared signer, 21,000
+gas each.
 
 ### Prerequisites
 
@@ -193,14 +218,10 @@ family-specific.
 scripts/run-benchmark.sh --mode allegro run
 ```
 
-That stops any previous runtime, generates the devnet, pre-signs the
-transactions, starts the node, sends the load, and writes
-`/tmp/allegro-benchmark/output/node_0_block_stats.log`. Stop everything with
+Generates the devnet, pre-signs the transactions, starts the node, sends the
+load, and writes `/tmp/allegro-benchmark/output/node_0_block_stats.log` (see
+[Measuring](#measuring)). Stop everything with
 `scripts/run-benchmark.sh --mode allegro stop`.
-
-As with Tempo, the line that matters is `tx_summary`: if `included` is far below
-`sent`, the run measured rejection (or an early stop — see the note on `num_idle`
-below), not throughput.
 
 ### Configure
 
@@ -218,46 +239,31 @@ authrpc, http) from `allegro_base_port`, so node0 serves JSON-RPC on
 into the generated genesis as the validator set, which is also how peers find
 each other — there is no separate peer list.
 
-Two settings decide what a number means:
-
-- `allegro_gas_limit` is written to genesis *and* pinned as the builder target.
-  At 21,000 gas per transfer it caps a block at `gas_limit/21000` transactions,
-  so report it alongside any result. Unset keeps allegro-xtask's 30M default
-  (~1,428 transfers per block).
-- `allegro_leader_timeout_ms` / `allegro_cert_timeout_ms` set the consensus block
-  cadence. Unset means the binary's own defaults (2000/4000).
-
-`allegro_node_args` is appended verbatim to every generated launcher, for flags
-the benchmark does not model (e.g. `--builder.interval 200ms`).
+- `allegro_gas_limit` goes into genesis *and* pins the builder target, capping a
+  block at `gas_limit/21000` transfers — report it with any result. Unset keeps
+  allegro-xtask's 30M default (~1,428 per block).
+- `allegro_leader_timeout_ms` / `allegro_cert_timeout_ms` set the block cadence;
+  unset means the binary's defaults (2000/4000).
+- `allegro_node_args` is appended verbatim to every launcher, for flags the
+  benchmark does not model (e.g. `--builder.interval 200ms`).
 
 ### Funding
 
 `allegro-xtask` prefunds 20 anvil accounts on HD branch 0, while the generator
-signs from `m/44'/60'/{node}'/0/{1..num_accounts}`. The benchmark therefore adds
-every account it will sign from to the genesis `alloc` before the nodes start —
-without that, only the first 19 transactions of node 0 could ever pay. Verify
-against a running node (no fee token on allegro, so skip that check):
+signs from `m/44'/60'/{node}'/0/{1..num_accounts}`, so the benchmark adds every
+account it will sign from to the genesis `alloc` — without that only node 0's
+first 19 transactions could pay. Verify against a running node (allegro has no
+fee token, hence the empty flag):
 
 ```bash
 go run ./cmd/checkfunding -rpc http://127.0.0.1:9003 -chain-id 1337 -fee-token ""
 ```
 
-### Sizing the run
-
-Allegro produces blocks far faster than the cosmos chains (tens per second at a
-1s leader timeout), and `num_idle` counts *blocks*, not seconds. A small value
-lets the run declare the chain idle within a fraction of a second of the last
-send — before the pool has been drained — and report `included=0` for a chain
-that was working fine. Keep the example's `num_idle: 40` (or raise it) and use a
-load large enough to span many blocks.
-
-The launcher also sizes reth's transaction pool from the spec
-(`--txpool.max-account-slots`, `--txpool.{pending,queued}-max-{count,size}`):
-the defaults hold 16 transactions per sender and 10,000 per sub-pool, so a
-benchmark load would otherwise be dropped at submission.
-
 ### Constraints
 
+- Allegro produces tens of blocks per second, so `num_idle` (a count of blocks)
+  must stay high; the example uses 40. Its transaction pool is sized from the
+  spec automatically, so it needs no `--txpool.*` flags of its own.
 - `runner_type: docker` is rejected — there is no allegro image, and the cosmos
   docker runner is cosmos-shaped.
 - `fullnodes` must be 0: every node in an allegro genesis validator set votes.
@@ -273,6 +279,42 @@ ALLEGRO_XTASK_BIN=/path/to/allegro-xtask go test ./internal/activities -run Alle
 
 The devnet-bootstrapping test skips unless that is set; the rest (launcher
 format, pool sizing, funding-vs-signer agreement) runs unconditionally.
+
+## Comparing chains
+
+The three example configs are held to one profile so their tx/s can go in a
+single table. Run them one at a time on the same host:
+
+```bash
+scripts/run-benchmark.sh --mode local   run   # evmd  (examples/config.local.yaml)
+scripts/run-benchmark.sh --mode tempo   run   # tempo (examples/config.tempo.yaml)
+scripts/run-benchmark.sh --mode allegro run   # allegro (examples/config.allegro.yaml)
+```
+
+Held identical: the load (2,000 accounts x 100 txs = 200,000),
+`broadcast_concurrency: 32`, a watermark and pool capacity above that load (see
+[Measuring](#measuring)), a 3e9 block gas limit (non-binding everywhere), one
+validator, `num_idle: 40`, and release binaries.
+
+Measured on one host, 200,000/200,000 included on each:
+
+| chain | sustained | median second | peak second | active_s | txs/block avg (max) |
+|---|---|---|---|---|---|
+| allegro | 33,333 / 28,571 | 35,618 | 39,505 | 6 / 7 | 2,941 (7,500) |
+| tempo | 28,571 | 26,844 | 42,125 | 7 | 12,500 (14,788) |
+| evmd | 6,061 | 6,198 | 8,046 | 33 | 5,555 (6,332) |
+
+The two allegro figures are repeat runs of the identical config: `sustained` is
+`included / active_seconds` in whole-second steps, so landing on 6 vs 7 seconds
+moves it ~15% while the peak second is stable to one transaction (39,505 and
+39,506). Quote `median_second` / `peak_second` at this load, and raise the load
+to 500,000 before publishing a `sustained` figure.
+
+Not aligned, and to be stated with any number: **transaction shape** — evmd and
+allegro run the identical 21,000-gas native transfer (like-for-like), while
+tempo rejects native value transfers and runs a ~271,000-gas TIP-20 transfer —
+and **block cadence**, which is each chain's own consensus default and part of
+what is being measured.
 
 ## Local Mode
 
