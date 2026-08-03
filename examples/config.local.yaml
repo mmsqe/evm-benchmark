@@ -41,17 +41,6 @@ benchmark:
     evm:
       mempool:
         "operate-exclusively": true
-        # Sized to hold the whole load. The defaults (global-slots 5120,
-        # global-queue 1024, account-slots 16) hold ~6k transactions, so an
-        # unthrottled 200k load drops three quarters of itself and the run
-        # measures rejection instead of throughput. These are evmd's names for
-        # reth's pending-max-count / queued-max-count / max-account-slots, so
-        # the tempo and allegro examples set the same capacities.
-        "global-slots": 250000
-        "global-queue": 250000
-        "account-slots": 100
-        "account-queue": 100
-        "insert-queue-size": "50000"
     json-rpc:
       api: eth,net,web3,txpool
   genesis_patch:
@@ -66,12 +55,18 @@ benchmark:
   validators: 1
   fullnodes: 0
   num_accounts: 2000
+  # 200,000 total. Sized per chain, not shared: evmd cannot finish the 500,000
+  # the tempo and allegro examples use, and full_second is a rate, so runs of
+  # different sizes compare as long as each is saturated and spans >= 5 whole
+  # seconds. See "Comparing chains" in the README.
   num_txs: 100
   num_idle: 40
   broadcast_concurrency: 32
-  # See the allegro example: the default 5,000-pending pause caps the backlog
-  # and measures the sender rather than the chain.
-  broadcast_pending_watermark: 250000
+  # Transactions per JSON-RPC request; one round trip each caps the sender
+  # near 50k tx/s. See "Measuring" in the README.
+  broadcast_batch_size: 100
+  # Negative: never pause. See the allegro example.
+  broadcast_pending_watermark: -1
 
   # workflow behavior
   # when true, starter loads existing data_dir/nodes.json and will NOT regenerate node homes/genesis

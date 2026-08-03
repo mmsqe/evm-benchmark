@@ -24,41 +24,48 @@ Temporal-based stateless EVM load testing in Go.
 
 ## Measuring
 
-Every run writes `block_stats.log` (and echoes a summary line). Read it in this
-order:
+Every run writes `block_stats.log` and echoes a summary line. Four lines matter:
 
-- `tx_summary sent=… included=… missing=…` — if `included` is far below `sent`
-  the run measured rejection, not throughput.
-- `tps_summary sustained=… median_second=… active_seconds=…` — rates are
-  transactions per whole second of block timestamps. `sustained` is every
-  included transaction over the active window; `top_tps` lists the busiest
-  seconds, one entry per second (so a *short* list means the chain drained the
-  load quickly, not that it was slow).
-- `tps_warning` — present when the load drained in under 5 seconds. The rate is
-  then bounded by `num_accounts * num_txs`, not by the chain; raise the load.
+| line | read it as |
+|---|---|
+| `tx_summary` | `included` far below `sent` means the run measured rejection |
+| `tps_summary` | **quote `full_second`** — see below |
+| `tps_warning` | fewer than 5 whole seconds; the load, not the chain, set the rate |
+| `send_warning` | the pool never reached a quarter of the load, so the chain kept pace with the sender and the rate is a lower bound |
 
-Rates are bucketed per second rather than over a sliding window of blocks
-because block timestamps only have second resolution: a 5-block window spans
-~2s on a chain doing 2.5 blocks/s but ~0.3s on one doing 15, so dividing by the
-timestamp difference understates the fast chain ~3x and overstates the slow one.
-Numbers measured before this change are not comparable with numbers after it.
+Rates are transactions per whole second of block timestamps. `full_second`
+covers only seconds lying entirely inside the load; `sustained` divides by the
+whole active window, including its partial first and last second, and so moves
+with where the load fell against a second boundary — two runs of one binary
+differed 14% on `sustained` while agreeing to 1% on `full_second`. Seconds,
+rather than a sliding window of blocks, because block timestamps have only
+second resolution: a 5-block window spans ~2s at 2.5 blocks/s but ~0.3s at 15,
+which understates a fast chain ~3x. The two warnings are independent — a run can
+span plenty of whole seconds while never making the chain work.
 
 Three settings decide whether a number means anything. All are set in the
 shipped examples:
 
-- **`broadcast_pending_watermark`** — the sender pauses while more than this
-  many transactions are pending (default 5,000). That caps how deep a backlog
-  the chain is ever given, so a chain that drains faster than the sender refills
-  ends up measuring the sender. Keep it above `num_accounts * num_txs`.
-- **Pool capacity** — must hold the whole load, or raising the watermark just
-  converts throttling into dropped transactions. reth-based chains (tempo,
-  allegro) default to 16 executable slots per sender; evmd's EVM mempool
-  defaults to `global-slots = 5120`, `global-queue = 1024`. On evmd note that
-  CometBFT's `mempool.size` is inert while `mempool.type = "app"` — the
-  capacities that matter live under `app_patch.evm.mempool`.
-- **`num_idle`** — counts *blocks* of no transactions before the run stops. On a
-  chain producing tens of blocks per second a cosmos-sized value ends the run
-  mid-drain.
+- **`broadcast_pending_watermark`** — negative never pauses. A positive value
+  caps how deep a backlog the chain is given, so a chain that drains faster than
+  the sender refills ends up measuring the sender.
+- **Pool capacity** — derived from `num_accounts * num_txs`, because anything
+  past a sender's slot limit is *rejected*, not queued. Don't pin it in config.
+- **`num_idle`** — counts *blocks* without transactions. On a chain producing
+  tens of blocks per second, a cosmos-sized value ends the run mid-drain.
+
+### Comparing a block-building change
+
+A chain that keeps pace with the sender says nothing about how it builds blocks.
+To put building on the critical path: `broadcast_batch_size: 100`, cap the block
+gas limit so throughput becomes blocks/s x txs/block (50M holds ~2,380
+transfers), confirm `send_warning` is absent, then run five interleaved pairs and
+compare `full_second` medians.
+
+Measured that way, a change pipelining payload building came out at +12.8%
+(+10.1-14.8% across five pairs, 3% within-branch spread). Without the setup the
+same change was invisible: both branches sat at the sender's ceiling, within
+0.2% of each other.
 
 ## Docker Mode (default)
 
@@ -282,39 +289,46 @@ format, pool sizing, funding-vs-signer agreement) runs unconditionally.
 
 ## Comparing chains
 
-The three example configs are held to one profile so their tx/s can go in a
-single table. Run them one at a time on the same host:
+Run the three examples one at a time on the same host:
 
 ```bash
-scripts/run-benchmark.sh --mode local   run   # evmd  (examples/config.local.yaml)
-scripts/run-benchmark.sh --mode tempo   run   # tempo (examples/config.tempo.yaml)
-scripts/run-benchmark.sh --mode allegro run   # allegro (examples/config.allegro.yaml)
+scripts/run-benchmark.sh --mode local   run   # evmd
+scripts/run-benchmark.sh --mode tempo   run   # tempo
+scripts/run-benchmark.sh --mode allegro run   # allegro
 ```
 
-Held identical: the load (2,000 accounts x 100 txs = 200,000),
-`broadcast_concurrency: 32`, a watermark and pool capacity above that load (see
-[Measuring](#measuring)), a 3e9 block gas limit (non-binding everywhere), one
-validator, `num_idle: 40`, and release binaries.
+They hold everything that drives a chain identical — concurrency 32, batch size
+100, a never-pausing watermark, derived pool capacity, a non-binding 3e9 block
+gas limit, one validator, `num_idle: 40`. The **load is not shared**:
+`full_second` is a rate, so sizes may differ as long as each run is saturated
+and spans five whole seconds, and no single size manages that everywhere.
 
-Measured on one host, 200,000/200,000 included on each:
+| chain | load | full_second | peak backlog | saturated? |
+|---|---|---|---|---|
+| allegro | 500,000 | 78,292 | 8,360 (1.7%) | no — lower bound |
+| tempo | 500,000 | 55,248 | 31,581 (6.3%) | no — lower bound |
+| evmd | 200,000 | **11,426** | 76,466 (38%) | yes |
 
-| chain | sustained | median second | peak second | active_s | txs/block avg (max) |
-|---|---|---|---|---|---|
-| allegro | 33,333 / 28,571 | 35,618 | 39,505 | 6 / 7 | 2,941 (7,500) |
-| tempo | 28,571 | 26,844 | 42,125 | 7 | 12,500 (14,788) |
-| evmd | 6,061 | 6,198 | 8,046 | 33 | 5,555 (6,332) |
+Only evmd was made to work at capacity; the other two drained the load as fast
+as it arrived and carry `send_warning`, so their figures mean "at least this
+fast". Raising the load alone will not fix that — the sender has to outrun the
+chain, which for these two means constraining block production.
 
-The two allegro figures are repeat runs of the identical config: `sustained` is
-`included / active_seconds` in whole-second steps, so landing on 6 vs 7 seconds
-moves it ~15% while the peak second is stable to one transaction (39,505 and
-39,506). Quote `median_second` / `peak_second` at this load, and raise the load
-to 500,000 before publishing a `sustained` figure.
+Two things to know before changing the loads:
 
-Not aligned, and to be stated with any number: **transaction shape** — evmd and
-allegro run the identical 21,000-gas native transfer (like-for-like), while
-tempo rejects native value transfers and runs a ~271,000-gas TIP-20 transfer —
-and **block cadence**, which is each chain's own consensus default and part of
-what is being measured.
+- **evmd wants ~100 transactions per sender, and few senders.** Deeper queues
+  collapse it (2,000 x 160 included 2,636 of 320,000; 2,000 x 250 never
+  finished) but so does spreading the same load thinner: 8,000 x 40 measured
+  2,127 tx/s against 6,695 for 2,000 x 100 in docker, because more senders make
+  its proposal assembly walk more accounts and blocks came out at 103 rather
+  than ~700. Shrinking the load costs accuracy too — 2,000 x 50 gave 7,921
+  against 11,426, the backlog never deepening.
+- **Docker costs about 1.7x** on evmd: 6,695 against 11,426 for the identical
+  2,000 x 100 shape.
+- **Not aligned, and worth stating with any number:** transaction shape (evmd
+  and allegro run the same 21,000-gas native transfer; tempo rejects native
+  transfers and runs a ~271,000-gas TIP-20 one) and block cadence, which is each
+  chain's own consensus default. The allegro row is its `main` branch.
 
 ## Local Mode
 

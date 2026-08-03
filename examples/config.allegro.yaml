@@ -74,18 +74,21 @@ benchmark:
   validators: 1
   fullnodes: 0
   num_accounts: 2000
-  num_txs: 100
+  # 500,000 total: at this chain's rate a smaller load drains in a few seconds
+  # and the run is bounded by the load rather than the chain. evmd uses a
+  # smaller one; see "Comparing chains" in the README.
+  num_txs: 250
   # Blocks, not seconds: the run stops once this many consecutive blocks are
   # empty. Allegro produces tens of blocks per second, so a cosmos-sized value
   # here ends the run a fraction of a second after the last send — before the
   # pool has drained — and reports included=0 for a chain that was fine.
   num_idle: 40
   broadcast_concurrency: 32
-  # Never pause sending: the default (5,000 pending) caps how deep a backlog the
-  # chain is given, so a chain that drains faster than the sender refills gets
-  # measured on the sender's loop instead of its own execution. Keep this above
-  # num_accounts * num_txs.
-  broadcast_pending_watermark: 250000
+  broadcast_batch_size: 100
+  # Negative: never pause. The default (5,000 pending) caps how deep a backlog
+  # the chain is given, so a chain that drains faster than the sender refills
+  # gets measured on the sender's loop instead of its own execution.
+  broadcast_pending_watermark: -1
 
   # workflow behavior
   start_node: true

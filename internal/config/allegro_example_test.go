@@ -26,9 +26,8 @@ func TestAllegroExampleConfigParses(t *testing.T) {
 	}
 	// The sender must not throttle, or a fast chain is measured on the
 	// generator's refill loop instead of its own execution.
-	if b.BroadcastPendingWatermark <= int64(b.NumAccounts*b.NumTxs) {
-		t.Errorf("broadcast_pending_watermark %d must exceed the load %d",
-			b.BroadcastPendingWatermark, b.NumAccounts*b.NumTxs)
+	if b.BroadcastPendingWatermark >= 0 {
+		t.Errorf("broadcast_pending_watermark = %d, want -1 (never pause)", b.BroadcastPendingWatermark)
 	}
 	if b.AllegroLeaderTimeoutMS != 1000 || b.AllegroCertTimeoutMS != 2000 {
 		t.Errorf("consensus timeouts not parsed: %d/%d", b.AllegroLeaderTimeoutMS, b.AllegroCertTimeoutMS)

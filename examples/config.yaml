@@ -49,31 +49,34 @@ benchmark:
     evm:
       mempool:
         "operate-exclusively": true
-        # Sized to hold the whole load; the defaults hold ~6k transactions, so
-        # the rest is dropped and the run measures rejection. See "Measuring".
-        "global-slots": 400000
-        "global-queue": 400000
-        "account-slots": 40
-        "account-queue": 40
-        "insert-queue-size": "50000"
     json-rpc:
       api: eth,net,web3,txpool
   genesis_patch:
     consensus:
       params:
         block:
-          max_gas: "363000000"
+          # Far above what a block actually fills, so gas is not the binding
+          # constraint — matching the tempo and allegro examples.
+          max_gas: "3000000000"
 
   # benchmark shape
   validators: 1
   fullnodes: 0
-  num_accounts: 8000
-  num_txs: 40
-  num_idle: 20
+  # 2,000 x 100, matching the local example. 8,000 senders x 40 measured 2,127
+  # tx/s against 6,695 for the same 200k load in this shape: more senders make
+  # evmd's proposal assembly walk more accounts per block, and it built 103-tx
+  # blocks instead of ~700. Load goes up via accounts only to ~100 txs each —
+  # see "Comparing chains" in the README.
+  num_accounts: 2000
+  num_txs: 100
+  num_idle: 40
   # cap concurrent eth_sendRawTransaction requests to avoid exhausting local sockets
   broadcast_concurrency: 32
-  # Above num_accounts * num_txs so the sender never pauses. See "Measuring".
-  broadcast_pending_watermark: 400000
+  # Transactions per JSON-RPC request; one round trip each caps the sender
+  # near 50k tx/s. See "Measuring" in the README.
+  broadcast_batch_size: 100
+  # Negative: never pause. See "Measuring".
+  broadcast_pending_watermark: -1
 
   # workflow behavior
   # when true, starter loads existing data_dir/nodes.json and will NOT regenerate node homes/genesis
