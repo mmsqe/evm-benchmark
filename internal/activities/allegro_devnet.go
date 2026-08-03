@@ -31,15 +31,6 @@ const (
 	// ETH allegro-xtask gives its own prefunded accounts. alloy serialises
 	// genesis balances as hex quantities.
 	allegroAccountBalance = "0x21e19e0c9bab2400000"
-
-	// reth's txpool defaults (16 executable slots per sender, 10k transactions
-	// and 20 MB per sub-pool) sit far below a benchmark load, and anything over
-	// them is dropped at submission — measuring rejection instead of throughput.
-	// The launcher sizes the pool from the spec instead; see allegroTxPoolArgs.
-	allegroMinPoolCount   = 10_000
-	allegroMinPoolSizeMB  = 20
-	allegroPoolBytesPerTx = 512
-	allegroMinAccountSlot = 16
 )
 
 // generateAllegroDevnet materialises an Allegro devnet under spec.DataDir/devnet:
@@ -186,25 +177,9 @@ func allegroNodeArgs(spec messages.BenchmarkSpec, globalSeq, base int) []string 
 		// EIP-1559 adjustment.
 		args = append(args, "--builder.gaslimit", strconv.FormatInt(spec.AllegroGasLimit, 10))
 	}
-	args = append(args, allegroTxPoolArgs(spec)...)
+	args = append(args, rethTxPoolArgs(spec)...)
 	// Extra flags last, so an operator can override any default above.
 	return append(args, spec.AllegroNodeArgs...)
-}
-
-// allegroTxPoolArgs sizes reth's transaction pool to hold this run's whole load.
-// Without it the defaults silently drop everything past 16 transactions per
-// sender or 10,000 per sub-pool, and the benchmark measures rejection.
-func allegroTxPoolArgs(spec messages.BenchmarkSpec) []string {
-	total := max(spec.NumAccounts, 0) * max(spec.NumTxs, 0)
-	count := max(total, allegroMinPoolCount)
-	sizeMB := max(total*allegroPoolBytesPerTx/(1<<20)+1, allegroMinPoolSizeMB)
-	return []string{
-		"--txpool.max-account-slots", strconv.Itoa(max(spec.NumTxs, allegroMinAccountSlot)),
-		"--txpool.pending-max-count", strconv.Itoa(count),
-		"--txpool.pending-max-size", strconv.Itoa(sizeMB),
-		"--txpool.queued-max-count", strconv.Itoa(count),
-		"--txpool.queued-max-size", strconv.Itoa(sizeMB),
-	}
 }
 
 // allegroRunScript describes the node's `run.sh`: the launcher plus a default

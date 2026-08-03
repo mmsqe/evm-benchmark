@@ -22,7 +22,7 @@ var (
 // (an exec'd command, one single-quoted arg per continued line, trailing
 // newline, no `set -eu`) must match what `tempo node` was verified to accept.
 func TestTempoRunScriptLocalFormat(t *testing.T) {
-	args := tempoNodeArgs(8006, "127.0.0.1", "127.0.0.1", "0.0.0.0",
+	args := tempoNodeArgs(messages.BenchmarkSpec{}, 8006, "127.0.0.1", "127.0.0.1", "0.0.0.0",
 		tempoLocalTrustedPeers(twoLocalVals, fixedIdentities), false, nil)
 	got := tempoRunScript("/opt/tempo", args, false).render()
 
@@ -70,7 +70,17 @@ exec '/opt/tempo' \
   '--ws.port' \
   '8011' \
   '--consensus.use-local-defaults' \
-  '--consensus.allow-private-ips'
+  '--consensus.allow-private-ips' \
+  '--txpool.max-account-slots' \
+  '16' \
+  '--txpool.pending-max-count' \
+  '10000' \
+  '--txpool.pending-max-size' \
+  '20' \
+  '--txpool.queued-max-count' \
+  '10000' \
+  '--txpool.queued-max-size' \
+  '20'
 `
 	if got != want {
 		t.Errorf("local run.sh mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
@@ -81,7 +91,7 @@ exec '/opt/tempo' \
 // `set -eu`, binds every service to 0.0.0.0 on the fixed 8000 block, advertises
 // the OTHER validators by service name, and ends with the bootnodes override.
 func TestTempoRunScriptDockerFormat(t *testing.T) {
-	args := tempoNodeArgs(tempoDockerConsensusPort, "0.0.0.0", "0.0.0.0", "0.0.0.0",
+	args := tempoNodeArgs(messages.BenchmarkSpec{}, tempoDockerConsensusPort, "0.0.0.0", "0.0.0.0", "0.0.0.0",
 		tempoDockerTrustedPeers(twoLocalVals, fixedIdentities, 0), true, nil)
 	got := tempoRunScript("tempo", args, true).render()
 
@@ -133,7 +143,17 @@ exec 'tempo' \
   '--consensus.use-local-defaults' \
   '--consensus.allow-private-ips' \
   '--tempo.bootnodes-endpoint' \
-  'none'
+  'none' \
+  '--txpool.max-account-slots' \
+  '16' \
+  '--txpool.pending-max-count' \
+  '10000' \
+  '--txpool.pending-max-size' \
+  '20' \
+  '--txpool.queued-max-count' \
+  '10000' \
+  '--txpool.queued-max-size' \
+  '20'
 `
 	if got != want {
 		t.Errorf("docker run.sh mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
@@ -147,16 +167,21 @@ exec 'tempo' \
 func TestTempoNodeArgsAppendsExtra(t *testing.T) {
 	extra := []string{"--consensus.target-block-time", "2s"}
 
-	local := tempoNodeArgs(8000, "127.0.0.1", "127.0.0.1", "0.0.0.0", nil, false, extra)
+	local := tempoNodeArgs(messages.BenchmarkSpec{}, 8000, "127.0.0.1", "127.0.0.1", "0.0.0.0", nil, false, extra)
 	if n := len(local); local[n-2] != extra[0] || local[n-1] != extra[1] {
 		t.Errorf("extra args not appended last (local): %v", local[len(local)-3:])
 	}
 
-	// Docker: extra flags stay last, after the bootnodes override.
-	docker := tempoNodeArgs(8000, "0.0.0.0", "0.0.0.0", "0.0.0.0", nil, true, extra)
-	if !strings.Contains(strings.Join(docker, " "),
-		"--tempo.bootnodes-endpoint none --consensus.target-block-time 2s") {
-		t.Errorf("expected bootnodes before extra args: %v", docker)
+	// Docker: extra flags stay last, after the bootnodes override and the
+	// derived pool sizing, so an operator can override any of them.
+	docker := tempoNodeArgs(messages.BenchmarkSpec{}, 8000, "0.0.0.0", "0.0.0.0", "0.0.0.0", nil, true, extra)
+	if n := len(docker); docker[n-2] != extra[0] || docker[n-1] != extra[1] {
+		t.Errorf("extra args not last: %v", docker[len(docker)-4:])
+	}
+	joined := strings.Join(docker, " ")
+	if !strings.Contains(joined, "--tempo.bootnodes-endpoint none") ||
+		!strings.Contains(joined, "--txpool.max-account-slots") {
+		t.Errorf("expected bootnodes and pool sizing before the extra args: %v", docker)
 	}
 }
 

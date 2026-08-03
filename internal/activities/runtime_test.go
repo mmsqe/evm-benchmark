@@ -252,3 +252,25 @@ func TestTempoConsensusRPCIsAbsent(t *testing.T) {
 		t.Error("cosmos chains do expose a consensus RPC")
 	}
 }
+
+// TestEvmMempoolSizesCoverTheLoad guards the failure that made a 500k run
+// report 40k included: evmd refuses transactions past account-slots outright,
+// so 2000 accounts x 250 txs against a pinned 100 lost 300,000 at submission.
+func TestEvmMempoolSizesCoverTheLoad(t *testing.T) {
+	spec := messages.BenchmarkSpec{NumAccounts: 2000, NumTxs: 250}
+	got := evmMempoolSizes(spec)
+	load := int64(spec.NumAccounts * spec.NumTxs)
+	for _, key := range []string{"global-slots", "global-queue"} {
+		if v := got[key].(int64); v < load {
+			t.Errorf("%s = %d, must hold the whole %d-tx load", key, v, load)
+		}
+	}
+	if v := got["account-slots"].(int64); v < int64(spec.NumTxs) {
+		t.Errorf("account-slots = %d, must cover num_txs %d", v, spec.NumTxs)
+	}
+	// A tiny load must not shrink the pool below evmd's own defaults.
+	small := evmMempoolSizes(messages.BenchmarkSpec{NumAccounts: 1, NumTxs: 1})
+	if v := small["global-slots"].(int64); v < 10000 {
+		t.Errorf("global-slots = %d for a small load, want the 10k floor", v)
+	}
+}

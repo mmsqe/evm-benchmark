@@ -126,24 +126,82 @@ func TestBucketTPSEmpty(t *testing.T) {
 	}
 }
 
-// TestRunStatsTooShort pins the guard for the case that prompted it: a 20,000
-// tx load drains in ~2 seconds on a fast chain, so top_tps has 2 entries (one
-// per active second) and no second ever had a backlog. The rate is then set by
-// the load, not the chain, and must be flagged rather than quoted.
+// TestRunStatsTooShort pins the guard against runs too short to compare. Two of
+// a run's active seconds are always partial, so what matters is how many whole
+// seconds it sampled, not how many it touched.
 func TestRunStatsTooShort(t *testing.T) {
 	for _, tc := range []struct {
-		activeSeconds int
-		want          bool
+		active, full int
+		want         bool
 	}{
-		{0, false}, // nothing included at all: a different problem
-		{2, true},
-		{4, true},
-		{5, false},
-		{18, false},
+		{0, 0, false}, // nothing included at all: a different problem
+		{5, 3, true},  // the five-second run that started this
+		{7, 5, false}, // five whole seconds is the floor
+		{34, 32, false},
 	} {
-		got := RunStats{ActiveSeconds: tc.activeSeconds}.TooShort()
+		got := RunStats{ActiveSeconds: tc.active, FullSeconds: tc.full}.TooShort()
 		if got != tc.want {
-			t.Errorf("ActiveSeconds=%d TooShort()=%v, want %v", tc.activeSeconds, got, tc.want)
+			t.Errorf("active=%d full=%d TooShort()=%v, want %v", tc.active, tc.full, got, tc.want)
+		}
+	}
+}
+
+// TestFullSecondTPSIgnoresPartialEdges is the regression this metric exists for.
+// A run's first and last active seconds are partial — the load starts and ends
+// mid-second — so `sustained` (total / active seconds) moves with where the load
+// happened to fall against the second boundary. Two runs of the same binary
+// differed 14% on sustained while their whole-second production agreed to 0.2%.
+//
+// Both runs below produce 60,000/s for three whole seconds and differ only in
+// how much spilled into the partial edges.
+func TestFullSecondTPSIgnoresPartialEdges(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	mk := func(rates ...int) []blockPoint {
+		var points []blockPoint
+		for i, r := range rates {
+			points = append(points, blocksAt(int64(i*10+1), base.Add(time.Duration(i)*time.Second), 1, r)...)
+		}
+		return points
+	}
+	early := bucketTPS(mk(50000, 60000, 60000, 60000, 10000)) // load landed early in the first second
+	late := bucketTPS(mk(10000, 60000, 60000, 60000, 50000))  // and late in the last
+
+	if got := fullSecondTPS(early); got != 60000 {
+		t.Errorf("early-aligned full-second rate = %.0f, want 60000", got)
+	}
+	if got := fullSecondTPS(late); got != 60000 {
+		t.Errorf("late-aligned full-second rate = %.0f, want 60000", got)
+	}
+	// Same production, but sustained cannot tell the two apart from a real change.
+	if sustainedTPS(early) != sustainedTPS(late) {
+		t.Fatalf("fixture broken: %v vs %v", sustainedTPS(early), sustainedTPS(late))
+	}
+	// A run with no interior second has no comparable rate at all.
+	if got := fullSecondTPS(bucketTPS(mk(1000, 2000))); got != 0 {
+		t.Errorf("two active seconds have no whole second, got %.0f", got)
+	}
+}
+
+// TestUndersaturatedFlagsSenderBoundRuns pins the check against the runs that
+// motivated it. Whole-seconds is not enough: evmd at a 100k load spanned 11 of
+// them yet only ever queued 13% of the load, and measured 7,921 tx/s — against
+// 11,426 at a 200k load that backed up to 38%.
+func TestUndersaturatedFlagsSenderBoundRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sent       int
+		maxPending int64
+		want       bool
+	}{
+		{"evmd 200k, backed up to 38%", 200000, 76466, false},
+		{"evmd 100k, only 13%", 100000, 13207, true},
+		{"tempo 500k, tracked the sender", 500000, 31581, true},
+		{"allegro 500k, at the sender's ceiling", 500000, 8360, true},
+		{"nothing sent", 0, 0, false},
+	} {
+		got := BroadcastStats{Sent: tc.sent, MaxPending: tc.maxPending}.Undersaturated()
+		if got != tc.want {
+			t.Errorf("%s: Undersaturated() = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

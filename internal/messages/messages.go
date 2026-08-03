@@ -113,10 +113,11 @@ type BenchmarkSpec struct {
 	RunNodes                bool  `yaml:"run_nodes"`
 	ValidatorGenerateLoad   bool  `yaml:"validator_generate_load"`
 	BroadcastConcurrency    int   `yaml:"broadcast_concurrency"`
-	// Pause sending while more than this many transactions are pending. 0 uses
-	// bench.DefaultPendingWatermark (5000). Raise past num_accounts*num_txs so
-	// the sender never throttles — otherwise a chain that drains faster than
-	// the sender refills is measured on the sender, not on itself.
+	// Pause sending while more than this many transactions are pending.
+	// Negative never pauses (the setting for a benchmark, and load-independent);
+	// 0 uses bench.DefaultPendingWatermark (5000). A throttled sender caps how
+	// deep a backlog the chain is given, so a chain that drains faster than the
+	// sender refills gets measured on the sender rather than on itself.
 	BroadcastPendingWatermark int64 `yaml:"broadcast_pending_watermark"`
 	// Transactions per JSON-RPC request. 1 (default) is one HTTP round trip per
 	// transaction, which caps the sender near 50k tx/s on loopback — below what
@@ -207,6 +208,11 @@ type NodeRunResult struct {
 	// SustainedTPS is every included transaction over ActiveSeconds, the
 	// seconds of block production that carried the load. A run with few active
 	// seconds is bounded by the load, not the chain — quote it with that count.
+	// FullSecondTPS is the rate over whole seconds of production, excluding the
+	// partial first and last. Compare this across runs — SustainedTPS moves with
+	// where the load fell relative to the second boundary.
+	FullSecondTPS float64
+	FullSeconds   int
 	SustainedTPS  float64
 	ActiveSeconds int
 	PendingTxpool int64

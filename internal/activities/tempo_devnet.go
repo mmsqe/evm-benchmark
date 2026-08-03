@@ -168,7 +168,7 @@ func generateTempoDevnet(ctx context.Context, spec messages.BenchmarkSpec, nodes
 		if docker {
 			// Compose invokes docker-run.sh by its in-container path, so it
 			// cannot share run.sh's name with the local launcher.
-			nodeArgs := tempoNodeArgs(tempoDockerConsensusPort,
+			nodeArgs := tempoNodeArgs(spec, tempoDockerConsensusPort,
 				"0.0.0.0", "0.0.0.0", "0.0.0.0",
 				tempoDockerTrustedPeers(vals, identities, i), true, spec.TempoNodeArgs)
 			script := tempoRunScript(tempoBin, nodeArgs, true).render()
@@ -176,7 +176,7 @@ func generateTempoDevnet(ctx context.Context, spec messages.BenchmarkSpec, nodes
 				return err
 			}
 		} else {
-			nodeArgs := tempoNodeArgs(v.Port,
+			nodeArgs := tempoNodeArgs(spec, v.Port,
 				v.Host, v.Host, "0.0.0.0",
 				tempoLocalTrustedPeers(vals, identities), false, spec.TempoNodeArgs)
 			if err := tempoRunScript(tempoBin, nodeArgs, false).write(nodeDir); err != nil {
@@ -216,7 +216,7 @@ func tempoXtaskGenesisArgs(spec messages.BenchmarkSpec, validatorsArg string) []
 
 // tempoNodeArgs builds the `tempo node` argument list (everything after the
 // binary). All paths are node-dir-relative; the launcher cd's there first.
-func tempoNodeArgs(base int, listenAddr, metricsAddr, rpcAddr string, trustedPeers []string, dockerBootnodes bool, extraArgs []string) []string {
+func tempoNodeArgs(spec messages.BenchmarkSpec, base int, listenAddr, metricsAddr, rpcAddr string, trustedPeers []string, dockerBootnodes bool, extraArgs []string) []string {
 	args := []string{
 		"node",
 		"--consensus.signing-key", "./signing.key",
@@ -244,6 +244,7 @@ func tempoNodeArgs(base int, listenAddr, metricsAddr, rpcAddr string, trustedPee
 	if dockerBootnodes {
 		args = append(args, "--tempo.bootnodes-endpoint", "none")
 	}
+	args = append(args, rethTxPoolArgs(spec)...)
 	// Extra flags last, so an operator can override any default above.
 	return append(args, extraArgs...)
 }

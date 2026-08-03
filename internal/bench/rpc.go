@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"sync"
@@ -133,6 +134,23 @@ type BroadcastStats struct {
 	Rejected int
 }
 
+// SaturationFloor is the fraction of the load that must queue up at some point
+// for the measured rate to describe the chain. A chain that never accumulates a
+// backlog was keeping pace with the sender, so what was measured is how fast
+// transactions could be submitted. A saturated chain is the opposite: the sender
+// outruns it and the pool grows toward the whole load.
+//
+// A quarter is well clear of both cases seen in practice — evmd at a 200k load
+// backed up to 38% and its rate rose accordingly, while runs that tracked the
+// sender sat at 2-6%.
+const SaturationFloor = 0.25
+
+// Undersaturated reports whether the chain kept pace with the sender, in which
+// case the rate is a lower bound on the chain rather than a measurement of it.
+func (b BroadcastStats) Undersaturated() bool {
+	return b.Sent > 0 && float64(b.MaxPending) < SaturationFloor*float64(b.Sent)
+}
+
 // Rate is transactions submitted per second.
 func (b BroadcastStats) Rate() float64 {
 	if b.Duration <= 0 {
@@ -141,20 +159,48 @@ func (b BroadcastStats) Rate() float64 {
 	return float64(b.Sent) / b.Duration.Seconds()
 }
 
+// awaitPoolRoom samples the pool, recording its depth, and waits while it is
+// above the watermark. Reports false if the context ended.
+func awaitPoolRoom(ctx context.Context, client *http.Client, rpcURL string, watermark int64, deepest *atomic.Int64) bool {
+	const backoff = 100 * time.Millisecond
+	for {
+		pending, err := TxPoolPendingCount(ctx, client, rpcURL)
+		if err != nil {
+			return true // a pool we cannot read cannot throttle us
+		}
+		for {
+			prev := deepest.Load()
+			if pending <= prev || deepest.CompareAndSwap(prev, pending) {
+				break
+			}
+		}
+		if pending <= watermark {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(backoff):
+		}
+	}
+}
+
 // BroadcastRawTxs sends every transaction, pausing while more than watermark
-// are pending (watermark <= 0 uses DefaultPendingWatermark).
+// are pending. Negative never pauses; 0 uses DefaultPendingWatermark.
 func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, txs []string, concurrency int, watermark int64, batchSize int) BroadcastStats {
 	if concurrency < 1 {
 		concurrency = 1
 	}
-	if watermark <= 0 {
+	switch {
+	case watermark < 0:
+		watermark = math.MaxInt64 // never pause
+	case watermark == 0:
 		watermark = DefaultPendingWatermark
 	}
 	if batchSize < 1 {
 		batchSize = 1
 	}
 
-	const txpoolBackoff = 100 * time.Millisecond
 	// Polling the pool before every transaction doubles the RPC cost of a send.
 	// When the watermark cannot be reached by this load it can never pause, so
 	// sample it periodically for the diagnostic instead of gating on it.
@@ -175,32 +221,16 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 			defer wg.Done()
 			sincePoll := 0
 			for chunk := range jobs {
-				for {
-					sincePoll += len(chunk)
-					if sincePoll < pollEvery {
-						break
-					}
+				sincePoll += len(chunk)
+				if sincePoll >= pollEvery {
 					sincePoll = 0
-					pending, err := TxPoolPendingCount(ctx, client, rpcURL)
-					if err == nil {
-						for {
-							prev := maxPending.Load()
-							if pending <= prev || maxPending.CompareAndSwap(prev, pending) {
-								break
-							}
-						}
+					if !awaitPoolRoom(ctx, client, rpcURL, watermark, &maxPending) {
+						return
 					}
-					if err == nil && pending > watermark {
-						select {
-						case <-ctx.Done():
-							return
-						case <-time.After(txpoolBackoff):
-						}
-						continue
-					}
-					break
 				}
 
+				// batchSize 1 keeps the plain single-request path, so a node
+				// that does not implement JSON-RPC batches still works.
 				if len(chunk) == 1 {
 					var result string
 					_ = JSONRPCCall(ctx, client, rpcURL, "eth_sendRawTransaction", chunk, &result)

@@ -110,11 +110,13 @@ func TestAllegroNodeArgsAppendsExtra(t *testing.T) {
 	}
 }
 
-// TestAllegroTxPoolArgsCoverTheLoad guards the failure mode the pool sizing
-// exists for: reth's defaults (16 slots per sender, 10k per sub-pool) drop
-// everything above them at submission, so a run would measure rejection.
-func TestAllegroTxPoolArgsCoverTheLoad(t *testing.T) {
-	args := allegroTxPoolArgs(messages.BenchmarkSpec{NumAccounts: 2000, NumTxs: 100})
+// TestRethTxPoolArgsCoverTheLoad guards the failure mode the pool sizing exists
+// for. reth refuses transactions past max-account-slots outright: a run with
+// num_txs 250 against the default 16 (or a hardcoded 100) had 2000*(250-100) =
+// 300,000 of its 500,000 rejected and reported a rate that measured nothing.
+// Slots must cover num_txs, and the sub-pools the whole load.
+func TestRethTxPoolArgsCoverTheLoad(t *testing.T) {
+	args := rethTxPoolArgs(messages.BenchmarkSpec{NumAccounts: 2000, NumTxs: 100})
 	want := map[string]string{
 		"--txpool.max-account-slots": "100",    // >= num_txs per sender
 		"--txpool.pending-max-count": "200000", // >= the whole load
@@ -135,7 +137,7 @@ func TestAllegroTxPoolArgsCoverTheLoad(t *testing.T) {
 	}
 
 	// A small load must not shrink the pool below reth's own defaults.
-	small := strings.Join(allegroTxPoolArgs(messages.BenchmarkSpec{NumAccounts: 1, NumTxs: 1}), " ")
+	small := strings.Join(rethTxPoolArgs(messages.BenchmarkSpec{NumAccounts: 1, NumTxs: 1}), " ")
 	for _, floor := range []string{
 		"--txpool.max-account-slots 16",
 		"--txpool.pending-max-count 10000",

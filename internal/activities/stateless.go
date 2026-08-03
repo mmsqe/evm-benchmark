@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -732,6 +733,19 @@ func doRun(
 		sendStats.Rejected); err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("write send summary: %w", err)
 	}
+	if sendStats.Undersaturated() {
+		// Passing the whole-seconds check does not imply this: a run can span
+		// plenty of seconds while the chain drains everything as it arrives.
+		if _, err := fmt.Fprintf(statsFile,
+			"send_warning the pool never held more than %d transactions (%.0f%% of the load): the chain kept "+
+				"pace with the sender, so this rate is a lower bound on it, not a measurement. Raise the load, "+
+				"or constrain the chain (block gas limit) so block production binds.\n",
+			sendStats.MaxPending, 100*float64(sendStats.MaxPending)/float64(sendStats.Sent)); err != nil {
+			return messages.NodeRunResult{}, fmt.Errorf("write send warning: %w", err)
+		}
+		logger.Warn("chain kept pace with the sender; rate is a lower bound",
+			"node", target.GlobalSeq, "max_pending", sendStats.MaxPending, "sent", sendStats.Sent)
+	}
 
 	stats, err := bench.DumpBlockStats(ctx, statsFile, client, rpcURL, 2, end, len(txs))
 	if err != nil {
@@ -742,6 +756,7 @@ func doRun(
 			"load drained too fast to measure a rate; raise num_accounts*num_txs",
 			"node", target.GlobalSeq,
 			"active_seconds", stats.ActiveSeconds,
+			"full_seconds", stats.FullSeconds,
 			"txs_sent", len(txs),
 		)
 	}
@@ -770,7 +785,9 @@ func doRun(
 		TxsSent:       len(txs),
 		IncludedTxs:   stats.IncludedTxs,
 		SustainedTPS:  stats.SustainedTPS,
+		FullSecondTPS: stats.FullSecondTPS,
 		ActiveSeconds: stats.ActiveSeconds,
+		FullSeconds:   stats.FullSeconds,
 		PendingTxpool: pendingTxpool,
 		TopTPS:        topTPS,
 		TopTPSDetails: topTPSDetails,
@@ -1221,6 +1238,14 @@ func patchConfigToml(home string, nodes []messages.NodeTarget, spec messages.Ben
 		return fmt.Errorf("decode app.toml: %w", err)
 	}
 	setNested(appCfg, []string{"minimum-gas-prices"}, fmt.Sprintf("0%s", spec.Denom))
+	// Size the EVM mempool to the load, the same way the reth families derive
+	// their --txpool.* flags. evmd's defaults hold ~6k transactions
+	// (global-slots 5120, global-queue 1024, account-slots 16), so anything
+	// past them is refused at submission and the run measures rejection. These
+	// are set before app_patch merges, so an operator can still override them.
+	for key, value := range evmMempoolSizes(spec) {
+		setNested(appCfg, []string{"evm", "mempool", key}, value)
+	}
 	setNested(appCfg, []string{"json-rpc", "enable"}, true)
 	if spec.RunnerType == "docker" {
 		setNested(appCfg, []string{"json-rpc", "address"}, "0.0.0.0:8545")
@@ -1257,6 +1282,18 @@ func patchConfigToml(home string, nodes []messages.NodeTarget, spec messages.Ben
 	}
 
 	return nil
+}
+
+// evmMempoolSizes renders poolCapacity as evmd's app.toml mempool keys.
+func evmMempoolSizes(spec messages.BenchmarkSpec) map[string]interface{} {
+	count, slots := poolCapacity(spec)
+	return map[string]interface{}{
+		"global-slots":      int64(count),
+		"global-queue":      int64(count),
+		"account-slots":     int64(slots),
+		"account-queue":     int64(slots),
+		"insert-queue-size": strconv.Itoa(max(count/10, 5000)),
+	}
 }
 
 func setNested(m map[string]interface{}, keys []string, val interface{}) {

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,6 +98,42 @@ func assertPortFree(port int) error {
 	return fmt.Errorf(
 		"port %d is already in use: a node from a previous run is still serving its own genesis; "+
 			"stop it first (scripts/run-benchmark.sh --mode <mode> stop)", port)
+}
+
+// reth's transaction pool defaults hold ~5,000 transactions: 16 executable
+// slots per sender and 10,000 per sub-pool. A benchmark load overruns them and
+// the excess is refused at submission, so a run reports a fraction of its load
+// included and a rate that measures nothing. Both reth-based families size the
+// pool from the spec instead of a hardcoded number, so raising num_txs cannot
+// silently leave it stale.
+const (
+	poolMinCount   = 10_000
+	poolMinSizeMB  = 20
+	poolMinSlots   = 16
+	poolBytesPerTx = 512
+	bytesPerMiB    = 1 << 20
+)
+
+// poolCapacity is how much pool a run needs: room for every transaction, and
+// per-sender slots covering num_txs, since the generator signs that many
+// sequential nonces per account and a sender past its limit is rejected rather
+// than queued. Both the reth flags and evmd's app-side mempool derive from it.
+func poolCapacity(spec messages.BenchmarkSpec) (count, slots int) {
+	total := max(spec.NumAccounts, 0) * max(spec.NumTxs, 0)
+	return max(total, poolMinCount), max(spec.NumTxs, poolMinSlots)
+}
+
+// rethTxPoolArgs renders poolCapacity as reth's --txpool.* flags.
+func rethTxPoolArgs(spec messages.BenchmarkSpec) []string {
+	count, slots := poolCapacity(spec)
+	sizeMB := max(count*poolBytesPerTx/bytesPerMiB+1, poolMinSizeMB)
+	return []string{
+		"--txpool.max-account-slots", strconv.Itoa(slots),
+		"--txpool.pending-max-count", strconv.Itoa(count),
+		"--txpool.pending-max-size", strconv.Itoa(sizeMB),
+		"--txpool.queued-max-count", strconv.Itoa(count),
+		"--txpool.queued-max-size", strconv.Itoa(sizeMB),
+	}
 }
 
 // runScript is the launcher written beside each node: an `exec`'d command with

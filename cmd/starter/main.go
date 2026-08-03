@@ -95,8 +95,9 @@ func main() {
 		// top_tps carries one entry per active second, so its length is
 		// ActiveSeconds (capped at 5) — printing that count keeps a short list
 		// from reading as a low rate.
-		fmt.Printf("node=%d sent=%d included=%d pending=%d sustained_tps=%.0f active_seconds=%d top_tps=%v\n",
-			r.GlobalSeq, r.TxsSent, r.IncludedTxs, r.PendingTxpool, r.SustainedTPS, r.ActiveSeconds, r.TopTPS)
+		fmt.Printf("node=%d sent=%d included=%d pending=%d full_second_tps=%.0f sustained_tps=%.0f full_seconds=%d/%d top_tps=%v\n",
+			r.GlobalSeq, r.TxsSent, r.IncludedTxs, r.PendingTxpool,
+			r.FullSecondTPS, r.SustainedTPS, r.FullSeconds, r.ActiveSeconds, r.TopTPS)
 	}
 }
 

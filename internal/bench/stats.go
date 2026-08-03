@@ -74,10 +74,8 @@ func bucketTPS(points []blockPoint) []tpsBucket {
 	return buckets
 }
 
-// sustainedTPS is the whole run's rate: every included transaction over the
-// active window. Immune to the per-window quantization above, so it is the
-// number to quote.
-func sustainedTPS(buckets []tpsBucket) float64 {
+// meanTPS averages a run of whole-second buckets.
+func meanTPS(buckets []tpsBucket) float64 {
 	if len(buckets) == 0 {
 		return 0
 	}
@@ -86,6 +84,28 @@ func sustainedTPS(buckets []tpsBucket) float64 {
 		total += b.Txs
 	}
 	return float64(total) / float64(len(buckets))
+}
+
+// sustainedTPS covers the whole active window, partial edges included, so it
+// moves with where the load fell against a second boundary. Prefer
+// fullSecondTPS.
+func sustainedTPS(buckets []tpsBucket) float64 { return meanTPS(buckets) }
+
+// fullSecondTPS is the rate over seconds that lie entirely inside the load: the
+// first and last active seconds are partial by construction (the load starts
+// and ends mid-second), so they drag the average down by however much of those
+// two seconds carried no load. That is pure alignment noise — two runs of the
+// same binary can differ 14% on sustained while agreeing to 0.2% here — so this
+// is the figure to compare across runs. Returns 0 below three active seconds,
+// where nothing is interior.
+func fullSecondTPS(buckets []tpsBucket) float64 { return meanTPS(interiorBuckets(buckets)) }
+
+// interiorBuckets drops the partial first and last seconds.
+func interiorBuckets(buckets []tpsBucket) []tpsBucket {
+	if len(buckets) < 3 {
+		return nil
+	}
+	return buckets[1 : len(buckets)-1]
 }
 
 // medianTPS is the middle second of the active window — a better summary than
@@ -124,20 +144,26 @@ func parseBlockTimestamp(raw string) (int64, error) {
 // is the run's resolution: a handful of seconds cannot show a chain's ceiling
 // because the load drains before any second is saturated.
 type RunStats struct {
-	Peaks         []blockPoint
-	IncludedTxs   int
-	SustainedTPS  float64
+	Peaks        []blockPoint
+	IncludedTxs  int
+	SustainedTPS float64
+	// FullSecondTPS excludes the partial first and last seconds; compare this
+	// across runs, not SustainedTPS.
+	FullSecondTPS float64
 	MedianTPS     float64
 	ActiveSeconds int
+	FullSeconds   int
 }
 
-// tpsMinActiveSeconds is the shortest run whose rate is worth quoting. Below
-// it the load, not the chain, sets the number.
-const tpsMinActiveSeconds = 5
+// tpsMinFullSeconds is the fewest whole seconds of production worth quoting a
+// rate from. Two of a run's active seconds are always partial, so a five-second
+// run samples only three whole ones and its numbers move with where the load
+// fell relative to the second boundary.
+const tpsMinFullSeconds = 5
 
-// TooShort reports whether the run drained before it could saturate the chain.
+// TooShort reports whether the run produced too few whole seconds to compare.
 func (s RunStats) TooShort() bool {
-	return s.ActiveSeconds > 0 && s.ActiveSeconds < tpsMinActiveSeconds
+	return s.ActiveSeconds > 0 && s.FullSeconds < tpsMinFullSeconds
 }
 
 func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpcURL string, startHeight, endHeight int64, txsSent int) (RunStats, error) {
@@ -274,18 +300,22 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 	stats := RunStats{
 		IncludedTxs:   totalIncludedTxs,
 		SustainedTPS:  sustainedTPS(buckets),
+		FullSecondTPS: fullSecondTPS(buckets),
 		MedianTPS:     medianTPS(buckets),
 		ActiveSeconds: len(buckets),
+		FullSeconds:   len(interiorBuckets(buckets)),
 	}
-	_, _ = fmt.Fprintf(out, "tps_summary sustained=%.2f median_second=%.2f active_seconds=%d\n",
-		stats.SustainedTPS, stats.MedianTPS, stats.ActiveSeconds)
+	_, _ = fmt.Fprintf(out,
+		"tps_summary full_second=%.2f sustained=%.2f median_second=%.2f active_seconds=%d full_seconds=%d\n",
+		stats.FullSecondTPS, stats.SustainedTPS, stats.MedianTPS, stats.ActiveSeconds, stats.FullSeconds)
 	if stats.TooShort() {
 		// One entry per active second, so a short run also explains a short
 		// top_tps list — and none of its seconds ever had a backlog to chew on.
 		_, _ = fmt.Fprintf(out,
-			"tps_warning the load drained in %d second(s): no second was saturated, so this rate is bounded by "+
-				"num_accounts*num_txs (%d), not by the chain. Raise the load until active_seconds >= %d.\n",
-			stats.ActiveSeconds, txsSent, tpsMinActiveSeconds)
+			"tps_warning only %d whole second(s) of production (%d active, two of them partial): the rate here "+
+				"moves with where the load fell relative to the second boundary, and is bounded by "+
+				"num_accounts*num_txs (%d) rather than by the chain. Raise the load until full_seconds >= %d.\n",
+			stats.FullSeconds, stats.ActiveSeconds, txsSent, tpsMinFullSeconds)
 	}
 
 	sort.Slice(buckets, func(i, j int) bool { return buckets[i].Txs > buckets[j].Txs })
