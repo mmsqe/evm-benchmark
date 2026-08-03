@@ -685,12 +685,14 @@ func doRun(
 		}
 	}
 
-	sendStats := bench.BroadcastRawTxs(ctx, client, rpcURL, txs, spec.BroadcastConcurrency, spec.BroadcastPendingWatermark)
+	sendStats := bench.BroadcastRawTxs(ctx, client, rpcURL, txs,
+		spec.BroadcastConcurrency, spec.BroadcastPendingWatermark, spec.BroadcastBatchSize)
 	logger.Info("broadcast complete",
 		"node", target.GlobalSeq,
 		"seconds", sendStats.Duration.Seconds(),
 		"send_rate", sendStats.Rate(),
 		"max_pending", sendStats.MaxPending,
+		"rejected", sendStats.Rejected,
 	)
 
 	if err := bench.DetectIdleOrHalt(
@@ -725,8 +727,9 @@ func doRun(
 	// an inclusion rate at or below the send rate, with the pool never deep,
 	// means the run measured submission rather than execution.
 	if _, err := fmt.Fprintf(statsFile,
-		"send_summary sent=%d seconds=%.2f rate=%.0f max_pending=%d\n",
-		sendStats.Sent, sendStats.Duration.Seconds(), sendStats.Rate(), sendStats.MaxPending); err != nil {
+		"send_summary sent=%d seconds=%.2f rate=%.0f max_pending=%d rejected=%d\n",
+		sendStats.Sent, sendStats.Duration.Seconds(), sendStats.Rate(), sendStats.MaxPending,
+		sendStats.Rejected); err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("write send summary: %w", err)
 	}
 

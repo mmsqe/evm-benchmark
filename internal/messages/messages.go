@@ -117,9 +117,14 @@ type BenchmarkSpec struct {
 	// bench.DefaultPendingWatermark (5000). Raise past num_accounts*num_txs so
 	// the sender never throttles — otherwise a chain that drains faster than
 	// the sender refills is measured on the sender, not on itself.
-	BroadcastPendingWatermark int64    `yaml:"broadcast_pending_watermark"`
-	StartNode                 bool     `yaml:"start_node"`
-	StartArgs                 []string `yaml:"start_args"`
+	BroadcastPendingWatermark int64 `yaml:"broadcast_pending_watermark"`
+	// Transactions per JSON-RPC request. 1 (default) is one HTTP round trip per
+	// transaction, which caps the sender near 50k tx/s on loopback — below what
+	// a fast chain executes, so the run measures submission instead. Batching
+	// removes that ceiling; the node must support JSON-RPC batch requests.
+	BroadcastBatchSize int      `yaml:"broadcast_batch_size"`
+	StartNode          bool     `yaml:"start_node"`
+	StartArgs          []string `yaml:"start_args"`
 }
 
 type PatchImageConfig struct {

@@ -31,6 +31,48 @@ type jsonRPCError struct {
 	Message string `json:"message"`
 }
 
+// sendRawTxBatch submits every transaction in one JSON-RPC batch request and
+// returns how many the node rejected. One HTTP round trip per transaction caps
+// the sender near 50k tx/s on loopback, which is below what a fast chain can
+// execute — at that point the benchmark measures submission, not the chain.
+func sendRawTxBatch(ctx context.Context, client *http.Client, url string, raws []string) (rejected int, err error) {
+	batch := make([]jsonRPCRequest, 0, len(raws))
+	for i, raw := range raws {
+		batch = append(batch, jsonRPCRequest{
+			JSONRPC: "2.0", Method: "eth_sendRawTransaction", Params: []string{raw}, ID: i + 1,
+		})
+	}
+	body, err := json.Marshal(batch)
+	if err != nil {
+		return 0, fmt.Errorf("marshal batch: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("create batch request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	// A server that does not support batching answers with a single object;
+	// treat that as a hard error rather than silently losing the batch.
+	var responses []jsonRPCResponse
+	if err := json.NewDecoder(resp.Body).Decode(&responses); err != nil {
+		return 0, fmt.Errorf("decode batch response (does this node support JSON-RPC batches?): %w", err)
+	}
+	for _, r := range responses {
+		if r.Error != nil {
+			rejected++
+		}
+	}
+	return rejected, nil
+}
+
 func JSONRPCCall(ctx context.Context, client *http.Client, url, method string, params interface{}, out interface{}) error {
 	body, err := json.Marshal(jsonRPCRequest{JSONRPC: "2.0", Method: method, Params: params, ID: 1})
 	if err != nil {
@@ -85,6 +127,10 @@ type BroadcastStats struct {
 	Sent       int
 	Duration   time.Duration
 	MaxPending int64
+	// Rejected counts transactions the node refused at submission. Single-send
+	// mode cannot see this (the response is discarded); batch mode reports it,
+	// which turns a silent "included < sent" into a diagnosable one.
+	Rejected int
 }
 
 // Rate is transactions submitted per second.
@@ -97,38 +143,44 @@ func (b BroadcastStats) Rate() float64 {
 
 // BroadcastRawTxs sends every transaction, pausing while more than watermark
 // are pending (watermark <= 0 uses DefaultPendingWatermark).
-func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, txs []string, concurrency int, watermark int64) BroadcastStats {
+func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, txs []string, concurrency int, watermark int64, batchSize int) BroadcastStats {
 	if concurrency < 1 {
 		concurrency = 1
 	}
 	if watermark <= 0 {
 		watermark = DefaultPendingWatermark
 	}
+	if batchSize < 1 {
+		batchSize = 1
+	}
 
 	const txpoolBackoff = 100 * time.Millisecond
 	// Polling the pool before every transaction doubles the RPC cost of a send.
 	// When the watermark cannot be reached by this load it can never pause, so
 	// sample it periodically for the diagnostic instead of gating on it.
+	// Counted in transactions, not requests, so batching does not silently turn
+	// the sample rate down by a factor of batchSize.
 	pollEvery := 1
 	if watermark >= int64(len(txs)) {
 		pollEvery = 256
 	}
 
 	started := time.Now()
-	var maxPending atomic.Int64
-	jobs := make(chan string)
+	var maxPending, rejected atomic.Int64
+	jobs := make(chan []string)
 	var wg sync.WaitGroup
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			sincePoll := 0
-			for raw := range jobs {
+			for chunk := range jobs {
 				for {
-					sincePoll++
-					if sincePoll%pollEvery != 0 {
+					sincePoll += len(chunk)
+					if sincePoll < pollEvery {
 						break
 					}
+					sincePoll = 0
 					pending, err := TxPoolPendingCount(ctx, client, rpcURL)
 					if err == nil {
 						for {
@@ -149,19 +201,30 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 					break
 				}
 
-				var result string
-				_ = JSONRPCCall(ctx, client, rpcURL, "eth_sendRawTransaction", []string{raw}, &result)
+				if len(chunk) == 1 {
+					var result string
+					_ = JSONRPCCall(ctx, client, rpcURL, "eth_sendRawTransaction", chunk, &result)
+					continue
+				}
+				if n, err := sendRawTxBatch(ctx, client, rpcURL, chunk); err == nil {
+					rejected.Add(int64(n))
+				}
 			}
 		}()
 	}
 
-	for _, tx := range txs {
-		jobs <- tx
+	for start := 0; start < len(txs); start += batchSize {
+		jobs <- txs[start:min(start+batchSize, len(txs))]
 	}
 	close(jobs)
 	wg.Wait()
 
-	return BroadcastStats{Sent: len(txs), Duration: time.Since(started), MaxPending: maxPending.Load()}
+	return BroadcastStats{
+		Sent:       len(txs),
+		Duration:   time.Since(started),
+		MaxPending: maxPending.Load(),
+		Rejected:   int(rejected.Load()),
+	}
 }
 
 func CurrentHeight(ctx context.Context, client *http.Client, rpcURL string) (int64, error) {
