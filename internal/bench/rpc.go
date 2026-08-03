@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -74,9 +75,29 @@ func JSONRPCCall(ctx context.Context, client *http.Client, url, method string, p
 // see broadcast_pending_watermark.
 const DefaultPendingWatermark = int64(5000)
 
+// BroadcastStats describes how the send itself went. It answers the question a
+// throughput number cannot: was the chain ever behind the sender? If MaxPending
+// stays small, the chain drained everything as fast as it arrived and the
+// measured rate is bounded by how fast transactions could be submitted, not by
+// how fast the chain can execute them — in which case a change to block
+// building will not move the number.
+type BroadcastStats struct {
+	Sent       int
+	Duration   time.Duration
+	MaxPending int64
+}
+
+// Rate is transactions submitted per second.
+func (b BroadcastStats) Rate() float64 {
+	if b.Duration <= 0 {
+		return 0
+	}
+	return float64(b.Sent) / b.Duration.Seconds()
+}
+
 // BroadcastRawTxs sends every transaction, pausing while more than watermark
 // are pending (watermark <= 0 uses DefaultPendingWatermark).
-func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, txs []string, concurrency int, watermark int64) {
+func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, txs []string, concurrency int, watermark int64) BroadcastStats {
 	if concurrency < 1 {
 		concurrency = 1
 	}
@@ -85,16 +106,38 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 	}
 
 	const txpoolBackoff = 100 * time.Millisecond
+	// Polling the pool before every transaction doubles the RPC cost of a send.
+	// When the watermark cannot be reached by this load it can never pause, so
+	// sample it periodically for the diagnostic instead of gating on it.
+	pollEvery := 1
+	if watermark >= int64(len(txs)) {
+		pollEvery = 256
+	}
 
+	started := time.Now()
+	var maxPending atomic.Int64
 	jobs := make(chan string)
 	var wg sync.WaitGroup
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			sincePoll := 0
 			for raw := range jobs {
 				for {
+					sincePoll++
+					if sincePoll%pollEvery != 0 {
+						break
+					}
 					pending, err := TxPoolPendingCount(ctx, client, rpcURL)
+					if err == nil {
+						for {
+							prev := maxPending.Load()
+							if pending <= prev || maxPending.CompareAndSwap(prev, pending) {
+								break
+							}
+						}
+					}
 					if err == nil && pending > watermark {
 						select {
 						case <-ctx.Done():
@@ -117,6 +160,8 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 	}
 	close(jobs)
 	wg.Wait()
+
+	return BroadcastStats{Sent: len(txs), Duration: time.Since(started), MaxPending: maxPending.Load()}
 }
 
 func CurrentHeight(ctx context.Context, client *http.Client, rpcURL string) (int64, error) {
