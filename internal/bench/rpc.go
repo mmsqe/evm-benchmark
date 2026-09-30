@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,15 +40,29 @@ type jsonRPCError struct {
 // at the usual one-second Retry-After.
 const rateLimitRetries = 60
 
-// postJSON posts req and decodes the reply into out. It waits out HTTP 429 as
-// long as the server asks: a public endpoint sends it, and failing the call
-// would silently drop a whole batch of transactions.
+// A request that gets no answer — a timeout, a reset, a 5xx from the proxy —
+// is retried this many times, retryBackoff apart. Dropping it would leave a
+// gap in an account's nonces, and everything after the gap would queue.
+const failedRetries = 3
+
+var retryBackoff = time.Second
+
+// postJSON posts req and decodes the reply into out, retrying what the server
+// did not answer and waiting out HTTP 429 as long as it asks.
 func postJSON(ctx context.Context, client *http.Client, url string, req, out interface{}) error {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("marshal rpc request: %w", err)
 	}
-	for attempt := 0; ; attempt++ {
+	wait := func(d time.Duration) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(d):
+			return nil
+		}
+	}
+	for attempt, failures := 0, 0; ; attempt++ {
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("create rpc request: %w", err)
@@ -55,17 +70,25 @@ func postJSON(ctx context.Context, client *http.Client, url string, req, out int
 		httpReq.Header.Set("Content-Type", "application/json")
 
 		resp, err := client.Do(httpReq)
-		if err != nil {
-			return err
-		}
-		if resp.StatusCode == http.StatusTooManyRequests && attempt < rateLimitRetries {
+		if err == nil && resp.StatusCode == http.StatusTooManyRequests && attempt < rateLimitRetries {
 			resp.Body.Close()
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(retryAfter(resp.Header.Get("Retry-After"))):
+			if err := wait(retryAfter(resp.Header.Get("Retry-After"))); err != nil {
+				return err
 			}
 			continue
+		}
+		if err == nil && resp.StatusCode/100 == 5 {
+			err = fmt.Errorf("rpc: HTTP %s", resp.Status)
+			resp.Body.Close()
+		}
+		if err != nil {
+			if failures++; failures <= failedRetries {
+				if err := wait(retryBackoff); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
 		}
 		err = json.NewDecoder(resp.Body).Decode(out)
 		resp.Body.Close()
@@ -92,11 +115,11 @@ func retryAfter(header string) time.Duration {
 }
 
 // sendRawTxBatch submits every transaction in one JSON-RPC batch request and
-// returns the hashes the node accepted and how many it rejected. One HTTP round
-// trip per transaction caps the sender near 50k tx/s on loopback, which is
-// below what a fast chain can execute — at that point the benchmark measures
-// submission, not the chain.
-func sendRawTxBatch(ctx context.Context, client *http.Client, url string, raws []string) (accepted, rejected []string, err error) {
+// returns the node's message for each one it rejected. One HTTP round trip per
+// transaction caps the sender near 50k tx/s on loopback, which is below what a
+// fast chain can execute — at that point the benchmark measures submission,
+// not the chain.
+func sendRawTxBatch(ctx context.Context, client *http.Client, url string, raws []string) (rejected []string, err error) {
 	batch := make([]jsonRPCRequest, 0, len(raws))
 	for i, raw := range raws {
 		batch = append(batch, jsonRPCRequest{
@@ -108,18 +131,16 @@ func sendRawTxBatch(ctx context.Context, client *http.Client, url string, raws [
 	// treat that as a hard error rather than silently losing the batch.
 	var responses []jsonRPCResponse
 	if err := postJSON(ctx, client, url, batch, &responses); err != nil {
-		return nil, nil, fmt.Errorf("send batch (does this node support JSON-RPC batches?): %w", err)
+		return nil, fmt.Errorf("send batch (does this node support JSON-RPC batches?): %w", err)
 	}
 	for _, r := range responses {
-		var hash string
-		switch {
-		case r.Error != nil:
+		// "already known" answers a retry of a request the node did admit
+		// before losing the reply: the transaction is in, not refused.
+		if r.Error != nil && r.Error.Message != "already known" {
 			rejected = append(rejected, r.Error.Message)
-		case json.Unmarshal(r.Result, &hash) == nil:
-			accepted = append(accepted, hash)
 		}
 	}
-	return accepted, rejected, nil
+	return rejected, nil
 }
 
 // numbers masks the nonces, hashes and amounts in a rejection message, so one
@@ -217,8 +238,13 @@ type BroadcastStats struct {
 	// PoolStalled means the pool stopped draining above the watermark, so the
 	// rest of the load was sent without waiting (see poolStallTimeout).
 	PoolStalled bool
-	// Accepted holds the hashes the node returned, when asked for.
-	Accepted TxSet
+	// Failed counts transactions in requests the node never answered, retries
+	// included; whether it admitted them shows up in the blocks.
+	Failed int
+	// Request latency: how long the node took to answer a send. Growing with
+	// the number of workers while the rate stays flat means the node answers
+	// one request at a time.
+	ReqP50, ReqP95, ReqMax time.Duration
 }
 
 // SaturationFloor is the fraction of the load that must queue up at some point
@@ -295,24 +321,12 @@ type BroadcastOptions struct {
 	// Watermark pauses sending while more transactions are pending. Negative
 	// never pauses; 0 uses DefaultPendingWatermark.
 	Watermark int64
-	// TrackAccepted collects the hashes the node returns into Accepted.
-	TrackAccepted bool
 }
 
 // BroadcastRawTxs sends txs in whatever order free workers take them.
 func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, txs []string, opts BroadcastOptions) BroadcastStats {
 	opts = opts.withDefaults()
-	shared := make(chan []string)
-	go func() {
-		defer close(shared)
-		for start := 0; start < len(txs); start += opts.BatchSize {
-			select {
-			case shared <- txs[start:min(start+opts.BatchSize, len(txs))]:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	shared := chunk(txs, opts.BatchSize)
 	queues := make([]chan []string, opts.Concurrency)
 	for w := range queues {
 		queues[w] = shared
@@ -321,8 +335,8 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 }
 
 // BroadcastStreams sends each stream in order: a worker owns whole streams and
-// sends one request at a time, taking its streams in turns so a batch spreads
-// over them. A node that is not the block producer may never forward a nonce
+// sends one request at a time, so nothing in a stream overtakes what came
+// before it. A node that is not the block producer may never forward a nonce
 // that arrived before its predecessor, so a remote run sends each account as a
 // stream.
 func BroadcastStreams(ctx context.Context, client *http.Client, rpcURL string, streams [][]string, opts BroadcastOptions) BroadcastStats {
@@ -332,22 +346,23 @@ func BroadcastStreams(ctx context.Context, client *http.Client, rpcURL string, s
 	total := 0
 	for w := range queues {
 		var mine []string
-		for k, more := 0, true; more; k++ {
-			more = false
-			for s := w; s < len(streams); s += workers {
-				if k < len(streams[s]) {
-					mine, more = append(mine, streams[s][k]), true
-				}
-			}
+		for s := w; s < len(streams); s += workers {
+			mine = append(mine, streams[s]...)
 		}
 		total += len(mine)
-		queues[w] = make(chan []string, len(mine)/opts.BatchSize+1)
-		for start := 0; start < len(mine); start += opts.BatchSize {
-			queues[w] <- mine[start:min(start+opts.BatchSize, len(mine))]
-		}
-		close(queues[w])
+		queues[w] = chunk(mine, opts.BatchSize)
 	}
 	return broadcast(ctx, client, rpcURL, queues, total, opts)
+}
+
+// chunk queues txs as batches of at most size, closed once all are queued.
+func chunk(txs []string, size int) chan []string {
+	q := make(chan []string, len(txs)/size+1)
+	for start := 0; start < len(txs); start += size {
+		q <- txs[start:min(start+size, len(txs))]
+	}
+	close(q)
+	return q
 }
 
 func (o BroadcastOptions) withDefaults() BroadcastOptions {
@@ -379,13 +394,11 @@ func broadcast(ctx context.Context, client *http.Client, rpcURL string, queues [
 	maxPending.Store(-1) // until a sample succeeds
 	var stalled atomic.Bool
 	var (
-		mu       sync.Mutex
-		accepted TxSet
-		reasons  = map[string]int{}
+		mu        sync.Mutex
+		reasons   = map[string]int{}
+		failed    int
+		latencies []time.Duration
 	)
-	if opts.TrackAccepted {
-		accepted = make(TxSet, total)
-	}
 	var wg sync.WaitGroup
 	for _, queue := range queues {
 		wg.Add(1)
@@ -393,6 +406,9 @@ func broadcast(ctx context.Context, client *http.Client, rpcURL string, queues [
 			defer wg.Done()
 			sincePoll := 0
 			for chunk := range queue {
+				if ctx.Err() != nil {
+					return
+				}
 				sincePoll += len(chunk)
 				if sincePoll >= pollEvery {
 					sincePoll = 0
@@ -403,21 +419,22 @@ func broadcast(ctx context.Context, client *http.Client, rpcURL string, queues [
 
 				// batchSize 1 keeps the plain single-request path, so a node
 				// that does not implement JSON-RPC batches still works.
-				var hashes, refused []string
+				var refused []string
+				var err error
+				sentAt := time.Now()
 				if len(chunk) == 1 {
 					var hash string
-					if JSONRPCCall(ctx, client, rpcURL, "eth_sendRawTransaction", chunk, &hash) == nil {
-						hashes = []string{hash}
-					}
-				} else if sent, rejected, err := sendRawTxBatch(ctx, client, rpcURL, chunk); err == nil {
-					hashes, refused = sent, rejected
+					err = JSONRPCCall(ctx, client, rpcURL, "eth_sendRawTransaction", chunk, &hash)
+				} else {
+					refused, err = sendRawTxBatch(ctx, client, rpcURL, chunk)
 				}
 				mu.Lock()
+				latencies = append(latencies, time.Since(sentAt))
+				if err != nil {
+					failed += len(chunk)
+				}
 				for _, msg := range refused {
 					reasons[numbers.ReplaceAllString(msg, "N")]++
-				}
-				if accepted != nil {
-					accepted.add(hashes...)
 				}
 				mu.Unlock()
 			}
@@ -429,6 +446,7 @@ func broadcast(ctx context.Context, client *http.Client, rpcURL string, queues [
 	for _, n := range reasons {
 		rejected += n
 	}
+	slices.Sort(latencies)
 	return BroadcastStats{
 		Sent:          total,
 		Duration:      time.Since(started),
@@ -437,8 +455,19 @@ func broadcast(ctx context.Context, client *http.Client, rpcURL string, queues [
 		RejectReasons: reasons,
 		PoolUnknown:   maxPending.Load() < 0,
 		PoolStalled:   stalled.Load(),
-		Accepted:      accepted,
+		Failed:        failed,
+		ReqP50:        percentile(latencies, 0.5),
+		ReqP95:        percentile(latencies, 0.95),
+		ReqMax:        percentile(latencies, 1),
 	}
+}
+
+// percentile of sorted durations; 0 when there are none.
+func percentile(sorted []time.Duration, p float64) time.Duration {
+	if len(sorted) == 0 {
+		return 0
+	}
+	return sorted[min(int(p*float64(len(sorted))), len(sorted)-1)]
 }
 
 func CurrentHeight(ctx context.Context, client *http.Client, rpcURL string) (int64, error) {

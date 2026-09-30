@@ -49,6 +49,9 @@ benchmark:
   broadcast_concurrency: 2
   broadcast_batch_size: 5
   broadcast_pending_watermark: -1
+  # A node that answers requests one at a time makes each wait for those ahead
+  # of it: allow (workers x batch) / (chain's admission rate), with margin.
+  broadcast_request_timeout_seconds: 60
 
   # workflow behavior
   start_node: false

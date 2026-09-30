@@ -130,9 +130,13 @@ type BenchmarkSpec struct {
 	// transaction, which caps the sender near 50k tx/s on loopback — below what
 	// a fast chain executes, so the run measures submission instead. Batching
 	// removes that ceiling; the node must support JSON-RPC batch requests.
-	BroadcastBatchSize int      `yaml:"broadcast_batch_size"`
-	StartNode          bool     `yaml:"start_node"`
-	StartArgs          []string `yaml:"start_args"`
+	BroadcastBatchSize int `yaml:"broadcast_batch_size"`
+	// How long one request may take. 10 (the default) suits a local node; a
+	// node that answers requests one at a time makes each wait for those ahead
+	// of it, so a remote run with many workers needs more.
+	BroadcastRequestTimeoutSeconds int      `yaml:"broadcast_request_timeout_seconds"`
+	StartNode                      bool     `yaml:"start_node"`
+	StartArgs                      []string `yaml:"start_args"`
 }
 
 type PatchImageConfig struct {

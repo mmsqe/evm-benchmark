@@ -29,6 +29,7 @@ import (
 	"github.com/mmsqe/evm-benchmark/internal/bench"
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
+	"github.com/mmsqe/evm-benchmark/internal/tempotx"
 	tomlv2 "github.com/pelletier/go-toml/v2"
 	"go.temporal.io/sdk/activity"
 )
@@ -621,7 +622,7 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
-	client := &http.Client{Timeout: 10 * time.Second, Transport: transport}
+	client := &http.Client{Timeout: time.Duration(spec.BroadcastRequestTimeoutSeconds) * time.Second, Transport: transport}
 	defer transport.CloseIdleConnections()
 	rpcURL := fmt.Sprintf("http://127.0.0.1:%d", evmPort)
 	if spec.RemoteRPCURL != "" {
@@ -697,23 +698,24 @@ func doRun(
 		}
 	}
 
-	// A shared chain carries everyone's transactions: count only the hashes the
-	// node returned for ours, from the block the run started at.
+	// A shared chain carries everyone's transactions: count only ours, by
+	// hash, from the block the run started at. Remote runs are Tempo only.
 	shared := spec.RemoteRPCURL != ""
 	statsFrom := int64(2)
+	var own bench.TxSet
 	if shared {
 		head, err := bench.CurrentHeight(ctx, client, rpcURL)
 		if err != nil {
 			return messages.NodeRunResult{}, fmt.Errorf("start height: %w", err)
 		}
 		statsFrom = head + 1
+		own = bench.NewTxSet(txs, tempotx.Hash)
 	}
 
 	opts := bench.BroadcastOptions{
-		Concurrency:   spec.BroadcastConcurrency,
-		BatchSize:     spec.BroadcastBatchSize,
-		Watermark:     spec.BroadcastPendingWatermark,
-		TrackAccepted: shared,
+		Concurrency: spec.BroadcastConcurrency,
+		BatchSize:   spec.BroadcastBatchSize,
+		Watermark:   spec.BroadcastPendingWatermark,
 	}
 	var sendStats bench.BroadcastStats
 	if shared {
@@ -728,13 +730,14 @@ func doRun(
 	} else {
 		sendStats = bench.BroadcastRawTxs(ctx, client, rpcURL, txs, opts)
 	}
-	own := sendStats.Accepted
 	logger.Info("broadcast complete",
 		"node", target.GlobalSeq,
 		"seconds", sendStats.Duration.Seconds(),
 		"send_rate", sendStats.Rate(),
 		"max_pending", sendStats.MaxPending,
 		"rejected", sendStats.Rejected,
+		"failed", sendStats.Failed,
+		"req_p50", sendStats.ReqP50,
 	)
 
 	pollInterval := time.Duration(spec.IdlePollIntervalSeconds) * time.Second
@@ -768,10 +771,19 @@ func doRun(
 	// an inclusion rate at or below the send rate, with the pool never deep,
 	// means the run measured submission rather than execution.
 	if _, err := fmt.Fprintf(statsFile,
-		"send_summary sent=%d seconds=%.2f rate=%.0f max_pending=%d rejected=%d\n",
+		"send_summary sent=%d seconds=%.2f rate=%.0f max_pending=%d rejected=%d failed=%d req_p50=%.2fs req_p95=%.2fs req_max=%.2fs\n",
 		sendStats.Sent, sendStats.Duration.Seconds(), sendStats.Rate(), sendStats.MaxPending,
-		sendStats.Rejected); err != nil {
+		sendStats.Rejected, sendStats.Failed, sendStats.ReqP50.Seconds(), sendStats.ReqP95.Seconds(),
+		sendStats.ReqMax.Seconds()); err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("write send summary: %w", err)
+	}
+	if sendStats.Failed > 0 {
+		if _, err := fmt.Fprintf(statsFile,
+			"send_warning %d transactions were in requests the node never answered (broadcast_request_timeout_seconds=%d); "+
+				"those it admitted anyway are counted below, the rest are missing.\n",
+			sendStats.Failed, spec.BroadcastRequestTimeoutSeconds); err != nil {
+			return messages.NodeRunResult{}, fmt.Errorf("write send warning: %w", err)
+		}
 	}
 	reasons := slices.Collect(maps.Keys(sendStats.RejectReasons))
 	slices.SortFunc(reasons, func(a, b string) int { return sendStats.RejectReasons[b] - sendStats.RejectReasons[a] })

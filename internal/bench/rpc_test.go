@@ -195,10 +195,11 @@ func TestWatermarkGivesUpOnStuckPool(t *testing.T) {
 	}
 }
 
-// TestBroadcastTracksAcceptedHashes pins what a shared-chain run is built on:
-// the hashes the node returned, rejected transactions left out, and a pool the
-// endpoint will not report flagged as unknown rather than read as empty.
-func TestBroadcastTracksAcceptedHashes(t *testing.T) {
+// TestBroadcastReportsRejections pins the send diagnostics: rejections grouped
+// by reason, "already known" (a retried request the node had admitted) not
+// among them, and a pool the endpoint will not report flagged as unknown
+// rather than read as empty.
+func TestBroadcastReportsRejections(t *testing.T) {
 	srv := fakeRPC(t, func(method string, params json.RawMessage) (interface{}, string) {
 		switch method {
 		case "txpool_status":
@@ -206,10 +207,13 @@ func TestBroadcastTracksAcceptedHashes(t *testing.T) {
 		case "eth_sendRawTransaction":
 			var raws []string
 			_ = json.Unmarshal(params, &raws)
-			if strings.HasPrefix(raws[0], "0xbad") {
+			switch {
+			case strings.HasPrefix(raws[0], "0xbad"):
 				return nil, "nonce too low: next nonce 7, tx nonce " + raws[0][5:]
+			case raws[0] == "0xdup":
+				return nil, "already known"
 			}
-			return "0xHASH-" + raws[0], ""
+			return "0xhash-" + raws[0], ""
 		}
 		return nil, "unexpected " + method
 	})
@@ -218,29 +222,60 @@ func TestBroadcastTracksAcceptedHashes(t *testing.T) {
 	for i := range txs {
 		txs[i] = fmt.Sprintf("0x%03d", i)
 	}
-	txs[5], txs[6] = "0xbad3", "0xbad4"
+	txs[5], txs[6], txs[7] = "0xbad3", "0xbad4", "0xdup"
 	stats := BroadcastRawTxs(context.Background(), srv.Client(), srv.URL, txs,
-		BroadcastOptions{Concurrency: 1, BatchSize: 100, Watermark: -1, TrackAccepted: true})
+		BroadcastOptions{Concurrency: 1, BatchSize: 100, Watermark: -1})
 
 	// Two rejections that differ only in their numbers are one reason.
 	if want := map[string]int{"nonce too low: next nonce N, tx nonce N": 2}; stats.Rejected != 2 || fmt.Sprint(stats.RejectReasons) != fmt.Sprint(want) {
 		t.Errorf("rejected = %d %v, want 2 %v", stats.Rejected, stats.RejectReasons, want)
 	}
-	if len(stats.Accepted) != 598 {
-		t.Errorf("accepted = %d hashes, want 598", len(stats.Accepted))
-	}
-	if _, ok := stats.Accepted["0xhash-0x000"]; !ok {
-		t.Error("accepted set is missing the node-returned (lower-cased) hash")
+	if stats.Failed != 0 || stats.ReqP50 <= 0 || stats.ReqMax < stats.ReqP95 {
+		t.Errorf("failed=%d p50=%s p95=%s max=%s, want no failures and ordered latencies", stats.Failed, stats.ReqP50, stats.ReqP95, stats.ReqMax)
 	}
 	if !stats.PoolUnknown || stats.Undersaturated() {
 		t.Errorf("PoolUnknown=%v Undersaturated=%v, want an unknown pool and no saturation verdict",
 			stats.PoolUnknown, stats.Undersaturated())
 	}
+}
 
-	untracked := BroadcastRawTxs(context.Background(), srv.Client(), srv.URL, txs[:10],
-		BroadcastOptions{Concurrency: 1, BatchSize: 5, Watermark: -1})
-	if untracked.Accepted != nil {
-		t.Error("hashes collected without being asked for")
+// TestBroadcastRetriesUnansweredRequests: a request the node did not answer
+// is sent again rather than dropped — a dropped one would leave a nonce gap
+// — and one that never gets an answer is counted as failed, not lost.
+func TestBroadcastRetriesUnansweredRequests(t *testing.T) {
+	defer func(d time.Duration) { retryBackoff = d }(retryBackoff)
+	retryBackoff = time.Millisecond
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1)%2 == 1 { // every other request draws a gateway error
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		var reqs []jsonRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&reqs)
+		out := make([]jsonRPCResponse, len(reqs))
+		for i, req := range reqs {
+			out[i] = jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(`"0xhash"`)}
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	}))
+	defer srv.Close()
+
+	txs := make([]string, 40)
+	stats := BroadcastRawTxs(context.Background(), srv.Client(), srv.URL, txs,
+		BroadcastOptions{Concurrency: 2, BatchSize: 10, Watermark: -1})
+	if stats.Failed != 0 || stats.Rejected != 0 {
+		t.Errorf("failed=%d rejected=%d after transient errors, want 0/0", stats.Failed, stats.Rejected)
+	}
+
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer dead.Close()
+	stats = BroadcastRawTxs(context.Background(), dead.Client(), dead.URL, txs,
+		BroadcastOptions{Concurrency: 2, BatchSize: 10, Watermark: -1})
+	if stats.Failed != 40 {
+		t.Errorf("failed = %d against a dead node, want all 40", stats.Failed)
 	}
 }
 

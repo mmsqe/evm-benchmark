@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -66,6 +67,23 @@ func (t *Tx) SignedRaw(key *ecdsa.PrivateKey) (string, error) {
 		return "", fmt.Errorf("encode signed transaction: %w", err)
 	}
 	return "0x76" + hex.EncodeToString(signed), nil
+}
+
+// Hash returns the hash the chain files a raw 0x76 transaction under. The
+// node stores the signature's v as 27/28 and hashes that form, so keccak of
+// an envelope signed with v in {0,1} (as SignedRaw emits) never matches; the
+// signature is the last field, so only the final byte differs. Verified on
+// Moderato: an envelope sent with v=27 came back with exactly this hash.
+// Other transaction types hash as sent.
+func Hash(raw string) string {
+	b, err := hexutil.Decode(raw)
+	if err != nil {
+		return ""
+	}
+	if len(b) > 1 && b[0] == txTypeByte && b[len(b)-1] < 27 {
+		b = append(append([]byte{}, b[:len(b)-1]...), b[len(b)-1]+27)
+	}
+	return crypto.Keccak256Hash(b).Hex()
 }
 
 // fields builds the RLP field list. sig==nil yields the sender-signing payload

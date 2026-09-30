@@ -288,6 +288,9 @@ func applyDefaults(cfg *AppConfig) {
 	if spec.BroadcastConcurrency == 0 {
 		spec.BroadcastConcurrency = 32
 	}
+	if spec.BroadcastRequestTimeoutSeconds == 0 {
+		spec.BroadcastRequestTimeoutSeconds = 10
+	}
 	if spec.IdlePollIntervalSeconds == 0 {
 		spec.IdlePollIntervalSeconds = 5
 	}

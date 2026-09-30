@@ -7,10 +7,18 @@ import (
 
 // TxSet holds the hashes of a run's own transactions, so that on a shared
 // chain other users' transactions are neither counted nor mistaken for load.
-// They are the hashes the node returned on submission: Tempo stores a 0x76
-// signature's v as 27/28 rather than the 0/1 sent, so keccak of the sent bytes
-// never matches.
 type TxSet map[string]struct{}
+
+// NewTxSet hashes raws with the chain's own hash function, so the set does
+// not depend on what the node answers: a request that times out may still
+// have been admitted, and its transactions are then found in blocks.
+func NewTxSet(raws []string, hash func(raw string) string) TxSet {
+	s := make(TxSet, len(raws))
+	for _, raw := range raws {
+		s.add(hash(raw))
+	}
+	return s
+}
 
 func (s TxSet) add(hashes ...string) {
 	for _, h := range hashes {

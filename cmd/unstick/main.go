@@ -74,7 +74,7 @@ func main() {
 	}
 
 	ctx := context.Background()
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: time.Duration(spec.BroadcastRequestTimeoutSeconds) * time.Second}
 	signer := types.LatestSignerForChainID(big.NewInt(spec.EVMChainID))
 	lastProgress, fewest := time.Now(), -1
 	for {
