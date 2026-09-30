@@ -31,6 +31,7 @@ type fakeTempo struct {
 	chainID   int64
 	balances  map[common.Address]*big.Int
 	nonces    map[common.Address]uint64 // protocol nonce (key 0)
+	pooled    map[common.Address]uint64 // transactions the node holds past it
 	keyNonces map[string]uint64         // "addr/key" for user keys
 	grant     *big.Int
 	funded    []common.Address
@@ -41,6 +42,7 @@ func newFakeTempo() *fakeTempo {
 		chainID:   42431,
 		balances:  map[common.Address]*big.Int{},
 		nonces:    map[common.Address]uint64{},
+		pooled:    map[common.Address]uint64{},
 		keyNonces: map[string]uint64{},
 		grant:     big.NewInt(1_000_000_000_000),
 	}
@@ -57,9 +59,14 @@ func (f *fakeTempo) handle(method string, params json.RawMessage) (interface{}, 
 	case "eth_chainId":
 		return fmt.Sprintf("0x%x", f.chainID), ""
 	case "eth_getTransactionCount":
-		var addr string
+		var addr, tag string
 		_ = json.Unmarshal(p[0], &addr)
-		return fmt.Sprintf("0x%x", f.nonces[common.HexToAddress(addr)]), ""
+		_ = json.Unmarshal(p[1], &tag)
+		a := common.HexToAddress(addr)
+		if tag == "pending" {
+			return fmt.Sprintf("0x%x", f.nonces[a]+f.pooled[a]), ""
+		}
+		return fmt.Sprintf("0x%x", f.nonces[a]), ""
 	case "eth_call":
 		var call struct{ To, Data string }
 		_ = json.Unmarshal(p[0], &call)
@@ -197,6 +204,26 @@ func TestTempoRemoteBootstrapFundsOnlyShortAccounts(t *testing.T) {
 	}
 	if len(chain.funded) != 1 {
 		t.Errorf("rerun called the faucet again: %v", chain.funded)
+	}
+}
+
+// TestTempoRemoteRefusesStuckSenders: a sender with transactions still in the
+// node's pool would queue the new run behind them, so the run must not start.
+func TestTempoRemoteRefusesStuckSenders(t *testing.T) {
+	chain := newFakeTempo()
+	srv := chain.serve(t)
+	spec := tempoRemoteSpec(srv.URL)
+	spec.TempoFaucet = true
+	stuck := remoteSender(t, 2)
+	chain.nonces[stuck] = 3387
+	chain.pooled[stuck] = 221
+
+	err := (tempoRuntime{}).Bootstrap(context.Background(), spec, []messages.NodeTarget{{GlobalSeq: 0}})
+	if err == nil || !strings.Contains(err.Error(), "unstick") || !strings.Contains(err.Error(), stuck.Hex()) {
+		t.Fatalf("err = %v, want the stuck sender named with the unstick fix", err)
+	}
+	if len(chain.funded) != 0 {
+		t.Error("funded senders for a run that must not start")
 	}
 }
 

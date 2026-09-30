@@ -76,7 +76,36 @@ func bootstrapTempoRemote(ctx context.Context, spec messages.BenchmarkSpec, node
 		}
 		senders = append(senders, s...)
 	}
+	if err := refuseStuckSenders(ctx, spec, senders); err != nil {
+		return err
+	}
 	return fundTempoSenders(ctx, spec, senders)
+}
+
+// refuseStuckSenders stops a run while senders still have transactions in the
+// node's pool from an earlier one: the new ones would queue behind them.
+func refuseStuckSenders(ctx context.Context, spec messages.BenchmarkSpec, senders []common.Address) error {
+	calls := make([]bench.RPCCall, 0, 2*len(senders))
+	for _, addr := range senders {
+		calls = append(calls,
+			bench.RPCCall{Method: "eth_getTransactionCount", Params: []interface{}{addr.Hex(), "latest"}},
+			bench.RPCCall{Method: "eth_getTransactionCount", Params: []interface{}{addr.Hex(), "pending"}})
+	}
+	counts, err := readNumbers(ctx, spec, calls)
+	if err != nil {
+		return fmt.Errorf("read nonces: %w", err)
+	}
+	var stuck []common.Address
+	for i, addr := range senders {
+		if counts[2*i+1].Cmp(counts[2*i]) > 0 {
+			stuck = append(stuck, addr)
+		}
+	}
+	if len(stuck) > 0 {
+		return fmt.Errorf("%d of %d senders still have transactions in the node's pool from an earlier run (first: %s); "+
+			"clear them with `go run ./cmd/unstick -config <this config>`, then run again", len(stuck), len(senders), stuck[0].Hex())
+	}
+	return nil
 }
 
 // tempoSenders returns the addresses a node signs from, in the order
