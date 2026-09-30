@@ -45,10 +45,28 @@ var tempoTxShapes = map[string]bool{
 	"swap": true,
 }
 
+// tempoNonceLanes is how many 2D-nonce lanes each account's transactions are
+// spread over. The swap shape's wall placements (tx 0/1) must be mined before
+// its swaps, which only holds within a single sequential lane.
+func tempoNonceLanes(spec messages.BenchmarkSpec) int {
+	if spec.TempoTxShape == "swap" {
+		return 1
+	}
+	return max(spec.TempoNonceLanes, 1)
+}
+
+// tempoUsesUserNonceKeys reports whether any lane signs on a nonce key other
+// than the protocol nonce (key 0).
+func tempoUsesUserNonceKeys(spec messages.BenchmarkSpec) bool {
+	return spec.TempoNonceKey > 0 || tempoNonceLanes(spec) > 1
+}
+
 // generateTempoNativeTxs derives this node's accounts and signs NumTxs native
-// transactions each, returning the raw hex strings in per-account order.
-// Signing is parallelised across accounts.
-func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, target messages.NodeTarget) ([]string, error) {
+// transactions each, returning the raw hex strings in per-account order (in
+// rounds across accounts on a remote chain). Signing is parallelised across
+// accounts. startNonces gives an account's
+// first nonce per lane; unlisted accounts start at 0, as on a fresh devnet.
+func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, target messages.NodeTarget, startNonces map[common.Address][]uint64) ([]string, error) {
 	if spec.NumAccounts < 1 || spec.NumTxs < 1 {
 		return nil, fmt.Errorf("num_accounts and num_txs must be >= 1 (got %d, %d)", spec.NumAccounts, spec.NumTxs)
 	}
@@ -66,15 +84,7 @@ func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, ta
 	if shape == "batch" && batchCalls < 1 {
 		return nil, fmt.Errorf("tempo_batch_calls must be >= 1 (got %d)", batchCalls)
 	}
-	lanes := spec.TempoNonceLanes
-	if lanes < 1 {
-		lanes = 1
-	}
-	if shape == "swap" {
-		// The wall placements (tx 0/1) must be mined before the swaps, which only
-		// holds within a single sequential nonce lane.
-		lanes = 1
-	}
+	lanes := tempoNonceLanes(spec)
 
 	token := common.HexToAddress(tempoDefaultFeeToken)
 	if spec.ERC20ContractAddress != "" {
@@ -121,6 +131,7 @@ func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, ta
 		// tx_shape=approve they all write the same exact-checked allowance slot,
 		// which is the workload that can conflict under optimistic execution.
 		laneNonce := make([]uint64, lanes)
+		copy(laneNonce, startNonces[self])
 		raws := make([]string, spec.NumTxs)
 		for i := 0; i < spec.NumTxs; i++ {
 			r := recipient
@@ -198,8 +209,19 @@ feed:
 	}
 
 	raws := make([]string, 0, spec.NumAccounts*spec.NumTxs)
-	for _, batch := range batches {
-		raws = append(raws, batch...)
+	if spec.RemoteRPCURL == "" {
+		for _, batch := range batches {
+			raws = append(raws, batch...)
+		}
+		return raws, nil
+	}
+	// A public node keeps its default per-sender pool limit (reth: 16 pending),
+	// so send in rounds — every account's first, then every second — rather
+	// than one account's whole run at once.
+	for i := 0; i < spec.NumTxs; i++ {
+		for _, batch := range batches {
+			raws = append(raws, batch[i])
+		}
 	}
 	return raws, nil
 }

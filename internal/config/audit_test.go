@@ -14,7 +14,7 @@ func TestAuditExamples(t *testing.T) {
 	if os.Getenv("AUDIT") == "" {
 		t.Skip("set AUDIT=1")
 	}
-	names := []string{"config.local.yaml", "config.yaml", "config.tempo.yaml", "config.tempo.docker.yaml", "config.allegro.yaml"}
+	names := []string{"config.local.yaml", "config.yaml", "config.tempo.yaml", "config.tempo.docker.yaml", "config.tempo.moderato.yaml", "config.allegro.yaml"}
 	fmt.Printf("%-26s %-7s %6s %5s %9s %5s %5s %8s %5s %5s %12s %s\n",
 		"config", "runner", "accts", "txs", "load", "conc", "batch", "waterm", "idle", "vals", "block_gas", "tx_type")
 	for _, n := range names {

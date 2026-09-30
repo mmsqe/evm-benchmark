@@ -166,7 +166,10 @@ func (s RunStats) TooShort() bool {
 	return s.ActiveSeconds > 0 && s.FullSeconds < tpsMinFullSeconds
 }
 
-func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpcURL string, startHeight, endHeight int64, txsSent int) (RunStats, error) {
+// DumpBlockStats reads blocks startHeight..endHeight and writes the run's
+// summary to out. A non-nil own counts only those transactions: on a shared
+// chain the blocks also carry everyone else's.
+func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpcURL string, startHeight, endHeight int64, txsSent int, own TxSet) (RunStats, error) {
 	const blockReadRetries = 8
 	const blockReadRetryDelay = 300 * time.Millisecond
 	const blockFetchConcurrency = 12
@@ -210,7 +213,11 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 						if tsErr != nil {
 							lastErr = fmt.Errorf("parse timestamp %q: %w", blk.Timestamp, tsErr)
 						} else {
-							point = blockPoint{Height: h, Txs: len(blk.Transactions), At: time.Unix(tsRaw, 0)}
+							txs := len(blk.Transactions)
+							if own != nil {
+								txs = own.Count(blk.Transactions)
+							}
+							point = blockPoint{Height: h, Txs: txs, At: time.Unix(tsRaw, 0)}
 							ok = true
 							break
 						}

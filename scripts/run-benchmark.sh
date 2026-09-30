@@ -20,11 +20,14 @@ Commands:
   run        Stop runtime + prepare + start temporal + run worker/starter
 
 Options:
-  --mode <docker|local|tempo|tempo-docker|allegro>
+  --mode <docker|local|tempo|tempo-docker|tempo-remote|allegro>
                           Runner mode (default: docker). "tempo" benchmarks a
                           Tempo devnet locally; "tempo-docker" runs the Tempo
                           validators as containers via docker compose (needs
                           tempo-xtask on the host and a tempo image);
+                          "tempo-remote" sends to a running Tempo network over
+                          its public RPC (Moderato by default; needs
+                          TEMPO_BENCH_MNEMONIC, no tempo binaries);
                           "allegro" benchmarks an Allegro devnet locally (needs
                           allegro and allegro-xtask).
   --config <path>         Config file path
@@ -47,6 +50,7 @@ Examples:
 
   scripts/run-benchmark.sh --mode tempo run
   scripts/run-benchmark.sh --mode tempo-docker run
+  TEMPO_BENCH_MNEMONIC="..." scripts/run-benchmark.sh --mode tempo-remote run
 
   scripts/run-benchmark.sh --mode allegro run
 USAGE
@@ -118,9 +122,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 case "$MODE" in
-  docker|local|tempo|tempo-docker|allegro) ;;
+  docker|local|tempo|tempo-docker|tempo-remote|allegro) ;;
   *)
-    echo "Invalid --mode: $MODE (expected docker, local, tempo, tempo-docker or allegro)"
+    echo "Invalid --mode: $MODE (expected docker, local, tempo, tempo-docker, tempo-remote or allegro)"
     exit 1
     ;;
 esac
@@ -130,6 +134,7 @@ if [[ -z "$CONFIG" ]]; then
     docker) CONFIG="./examples/config.yaml" ;;
     tempo)  CONFIG="./examples/config.tempo.yaml" ;;
     tempo-docker) CONFIG="./examples/config.tempo.docker.yaml" ;;
+    tempo-remote) CONFIG="./examples/config.tempo.moderato.yaml" ;;
     allegro) CONFIG="./examples/config.allegro.yaml" ;;
     *)      CONFIG="./examples/config.local.yaml" ;;
   esac
@@ -141,6 +146,7 @@ if [[ -z "$DATA_ROOT" ]]; then
     tempo)  DATA_ROOT="/tmp/tempo-benchmark/data" ;;
     # Under $HOME so colima can bind-mount each node dir into its container.
     tempo-docker) DATA_ROOT="$HOME/tempo-benchmark-docker/data" ;;
+    tempo-remote) DATA_ROOT="/tmp/tempo-remote-benchmark/data" ;;
     allegro) DATA_ROOT="/tmp/allegro-benchmark/data" ;;
     *)      DATA_ROOT="/private/tmp/evm-benchmark-local/data" ;;
   esac
@@ -232,6 +238,7 @@ run_clean() {
   case "$MODE" in
     tempo) rm -rf /tmp/tempo-benchmark ;;
     tempo-docker) rm -rf "$HOME/tempo-benchmark-docker" ;;
+    tempo-remote) rm -rf /tmp/tempo-remote-benchmark ;;
     allegro) rm -rf /tmp/allegro-benchmark ;;
   esac
 }

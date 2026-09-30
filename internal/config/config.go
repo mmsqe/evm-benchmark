@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -98,6 +99,10 @@ func expandSpecPaths(spec *messages.BenchmarkSpec) {
 	spec.AllegroXtaskBin = expandPath(spec.AllegroXtaskBin)
 	spec.ChainsConfigPath = expandPath(spec.ChainsConfigPath)
 	spec.PatchImage.SourceDir = expandPath(spec.PatchImage.SourceDir)
+	// Not paths, but read from the environment too, so a public-network config
+	// can be committed without its mnemonic or a keyed provider URL.
+	spec.RemoteRPCURL = os.ExpandEnv(spec.RemoteRPCURL)
+	spec.BaseMnemonic = os.ExpandEnv(spec.BaseMnemonic)
 }
 
 func applyChainConfig(configPath string, cfg *AppConfig) error {
@@ -347,6 +352,9 @@ func validate(cfg AppConfig, runtimeValidation bool) error {
 	if cfg.Benchmark.RunnerType != "local" && cfg.Benchmark.RunnerType != "docker" {
 		return fmt.Errorf("benchmark.runner_type must be \"local\" or \"docker\"")
 	}
+	if err := validateRemote(cfg.Benchmark); err != nil {
+		return err
+	}
 
 	if !runtimeValidation {
 		return nil
@@ -362,6 +370,30 @@ func validate(cfg AppConfig, runtimeValidation bool) error {
 		if cfg.Benchmark.RunnerType == "docker" && cfg.Benchmark.PatchImage.FromImage == "" && cfg.Benchmark.DockerImage == "" {
 			return fmt.Errorf("benchmark.patch_image.enabled requires benchmark.patch_image.from_image or benchmark.docker_image")
 		}
+	}
+	return nil
+}
+
+// validateRemote rejects the settings a remote run cannot honour. Checked on
+// the generate path too, since that is where a remote run funds its accounts.
+func validateRemote(spec messages.BenchmarkSpec) error {
+	if spec.RemoteRPCURL == "" {
+		return nil
+	}
+	if u, err := url.Parse(spec.RemoteRPCURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("benchmark.remote_rpc_url %q is not an http(s) URL", spec.RemoteRPCURL)
+	}
+	if spec.ChainFamily != "tempo" {
+		// The shared legacy signer starts every account at nonce 0, which only
+		// holds on a chain the benchmark just created.
+		return fmt.Errorf("benchmark.remote_rpc_url is supported for chain_family: tempo only")
+	}
+	if spec.StartNode || spec.RunnerType != "local" {
+		return fmt.Errorf("benchmark.remote_rpc_url benchmarks a running network; set start_node: false and runner_type: local")
+	}
+	if spec.Validators != 1 || spec.Fullnodes != 0 {
+		return fmt.Errorf("benchmark.remote_rpc_url drives one endpoint from one sender; set validators: 1 and fullnodes: 0 (got %d/%d)",
+			spec.Validators, spec.Fullnodes)
 	}
 	return nil
 }

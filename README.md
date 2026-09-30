@@ -173,6 +173,35 @@ Each node draws a disjoint slice of the funded account branch, so genesis funds
 `validators * num_accounts + 1` accounts (index 0 is the validator key). Note that this measures the tempo build inside the
 image, which is usually not the binary you built locally.
 
+### Public testnet (Moderato)
+
+`remote_rpc_url` sends to a Tempo network that is already running. Nothing is
+generated or started, and no tempo binaries are needed:
+
+```bash
+export TEMPO_BENCH_MNEMONIC="$(cast wallet new-mnemonic | sed -n '/^Phrase:/{n;p;}')"
+scripts/run-benchmark.sh --mode tempo-remote run   # examples/config.tempo.moderato.yaml
+```
+
+- Sign with your own mnemonic; the devnet one is refused, since its accounts are
+  public. It still lands in `data_dir/config.json` and Temporal history, so use
+  a throwaway.
+- `tempo_faucet: true` funds senders that cannot cover the run's worst-case
+  fees via `tempo_fundAddress`.
+- Nonces are read from the chain, so accounts can be reused.
+- Only this run's transactions count, by the hash the node returned (Tempo
+  stores the signature's `v` as 27/28, so keccak of the bytes sent never
+  matches); the run ends once they have all landed.
+
+The public endpoint rate-limits (HTTP 429, waited out), caps batches (5
+`eth_sendRawTransaction` pass, 10 do not) and hides `txpool_status`. The rate
+reflects the gateway as much as the chain: use it for inclusion behaviour, not
+capacity, and keep loads small.
+
+2D nonces (`tempo_nonce_key`, `tempo_nonce_lanes`) let fewer accounts carry the
+load and keep the run off each account's own nonce, at 22,100 gas for a key's
+first transaction and 5,000 after.
+
 ### Troubleshooting
 
 Verify the accounts the generator signs from can actually pay, against the RPC

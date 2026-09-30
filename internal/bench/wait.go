@@ -113,3 +113,57 @@ func DetectIdleOrHalt(ctx context.Context, client *http.Client, rpcURL string, i
 		}
 	}
 }
+
+// WaitForTxs is DetectIdleOrHalt for a shared chain, whose blocks are never
+// empty. Reading blocks from `from` on, it returns once every transaction in
+// own is included, once idleBlocks blocks pass without any of them (counted
+// from the call or the last inclusion), or once the chain stalls for haltAfter.
+func WaitForTxs(ctx context.Context, client *http.Client, rpcURL string, own TxSet, from int64, idleBlocks int, pollInterval, haltAfter time.Duration) error {
+	remaining := len(own)
+	next := from
+	quietSince := int64(-1) // head at the first poll, then the last block carrying ours
+	lastHead := int64(-1)
+	lastProgressAt := time.Now()
+
+	for {
+		h, err := CurrentHeight(ctx, client, rpcURL)
+		if err == nil {
+			if quietSince < 0 {
+				quietSince = h
+			}
+			if h > lastHead {
+				lastHead = h
+				lastProgressAt = time.Now()
+			}
+			for ; next <= h; next++ {
+				blk, err := BlockByNumber(ctx, client, rpcURL, next)
+				if err != nil {
+					break // resumed from this height on the next poll
+				}
+				if n := own.Count(blk.Transactions); n > 0 {
+					remaining -= n
+					quietSince = max(quietSince, next)
+				}
+			}
+			if remaining <= 0 {
+				fmt.Printf("[bench] all %d transactions included by height=%d\n", len(own), next-1)
+				return nil
+			}
+			if quiet := next - 1 - quietSince; quiet >= int64(idleBlocks) {
+				fmt.Printf("[bench] %d of %d transactions still missing after %d blocks without any: treating them as dropped\n",
+					remaining, len(own), quiet)
+				return nil
+			}
+		}
+		if time.Since(lastProgressAt) >= haltAfter {
+			fmt.Printf("[bench] halt detected: no block progress for %s at height=%d\n", haltAfter, lastHead)
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}

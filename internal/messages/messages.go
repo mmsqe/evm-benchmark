@@ -52,6 +52,10 @@ type BenchmarkSpec struct {
 	RPCPort                  int                    `yaml:"rpc_port"`
 	EVMRPCPort               int                    `yaml:"evm_rpc_port"`
 
+	// RemoteRPCURL sends to an already-running network, such as a public
+	// testnet, instead of generating one. Tempo only.
+	RemoteRPCURL string `yaml:"remote_rpc_url"`
+
 	// Tempo-family settings (chain_family: tempo). Tempo networks are generated
 	// in-process via `tempo-xtask generate-localnet` rather than a chain binary.
 	TempoBin         string `yaml:"tempo_bin"`
@@ -80,6 +84,9 @@ type BenchmarkSpec struct {
 	// (several calls per transaction). Empty means the generator's default.
 	TempoTxShape    string `yaml:"tempo_tx_shape"`
 	TempoBatchCalls int    `yaml:"tempo_batch_calls"`
+	// With remote_rpc_url: fund senders short of the run's fees through the
+	// endpoint's tempo_fundAddress faucet (testnets only).
+	TempoFaucet bool `yaml:"tempo_faucet"`
 	// Docker mode: the devnet is generated with a compose file and the whole
 	// cluster is started by `docker compose up`, rather than one container per
 	// node as the cosmos runner does.

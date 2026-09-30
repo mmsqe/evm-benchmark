@@ -1,0 +1,60 @@
+# Tempo public testnet (Moderato) through its public RPC. Nothing is started:
+# senders are funded from the faucet and only this run's transactions count.
+#
+# The rate reflects a shared, rate-limited gateway as much as the chain, so it
+# is not comparable with the devnet examples. Keep the load small.
+#
+# Sign with your own mnemonic (the devnet one is refused):
+#   export TEMPO_BENCH_MNEMONIC="$(cast wallet new-mnemonic | sed -n '/^Phrase:/{n;p;}')"
+temporal:
+  host_port: 127.0.0.1:7233
+  namespace: default
+  task_queue: EVM_BENCHMARK_TASK_QUEUE
+
+start:
+  workflow_id: tempo-moderato-benchmark
+
+benchmark:
+  data_dir: /tmp/tempo-remote-benchmark/data
+  out_dir: /tmp/tempo-remote-benchmark/output
+
+  chain_family: tempo
+  runner_type: local
+  remote_rpc_url: https://rpc.moderato.tempo.xyz
+  evm_chain_id: 42431
+  base_mnemonic: ${TEMPO_BENCH_MNEMONIC}
+  tempo_faucet: true
+
+  tempo_tx_shape: self
+  tx_type: erc20-transfer
+  erc20_contract_address: "0x20c0000000000000000000000000000000000000"
+  erc20_transfer_gas: 300000
+  # Max fee; the base fee is 0.6 gwei.
+  gas_price_wei: 3000000000
+  tempo_max_priority_fee_per_gas: 1000000000
+
+  # 2D nonces: fewer accounts carry the load, off each account's own nonce.
+  # Costs 22,100 gas on a key's first transaction, 5,000 after.
+  # tempo_nonce_key: 1000
+  # tempo_nonce_lanes: 4
+
+  validators: 1
+  fullnodes: 0
+  num_accounts: 20
+  num_txs: 25
+  # Blocks without any of this run's transactions (~25s at ~0.6s blocks).
+  num_idle: 40
+  # The gateway refuses 10 eth_sendRawTransaction per batch and accepts 5; the
+  # balance and nonce reads use the same cap.
+  broadcast_concurrency: 2
+  broadcast_batch_size: 5
+  broadcast_pending_watermark: -1
+
+  # workflow behavior
+  start_node: false
+  skip_generate_layout: false
+  pre_generate_txs: true
+  run_nodes: true
+  validator_generate_load: true
+  patch_image:
+    enabled: false

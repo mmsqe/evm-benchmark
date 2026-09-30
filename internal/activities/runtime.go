@@ -27,7 +27,9 @@ type ChainRuntime interface {
 	// generated (chain id, denom, genesis patches, ...).
 	EnrichSpec(spec *messages.BenchmarkSpec) error
 
-	// Bootstrap creates node homes, keys and genesis for the given targets.
+	// Bootstrap creates node homes, keys and genesis for the given targets —
+	// or, for an already-running network (remote_rpc_url), funds their
+	// accounts on it.
 	Bootstrap(ctx context.Context, spec messages.BenchmarkSpec, nodes []messages.NodeTarget) error
 
 	// HasConsensusRPC reports whether nodes expose a consensus RPC endpoint

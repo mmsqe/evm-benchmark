@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/mmsqe/evm-benchmark/internal/bench"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 )
@@ -31,6 +32,10 @@ const (
 	// tempoMinTxGas is Tempo's intrinsic gas floor (~21k + ~250k); anything
 	// below is rejected with "call gas cost exceeds the gas limit".
 	tempoMinTxGas = 272000
+
+	// tempoNewNonceKeyGas is the intrinsic surcharge on the first transaction
+	// of a user nonce key (key != 0); later ones pay 5,000, key 0 nothing.
+	tempoNewNonceKeyGas = 22100
 )
 
 // tempoPorts is Tempo's per-node port allocation.
@@ -87,10 +92,15 @@ func (tempoRuntime) EnrichSpec(spec *messages.BenchmarkSpec) error {
 			minGas = shapeGas
 		}
 	}
+	onKeys := ""
+	if tempoUsesUserNonceKeys(*spec) {
+		minGas += tempoNewNonceKeyGas
+		onKeys = " on user nonce keys"
+	}
 	if spec.ERC20TransferGas < minGas {
 		return fmt.Errorf(
-			"erc20_transfer_gas %d is below the floor for tx_shape %q (%d); transactions would be rejected",
-			spec.ERC20TransferGas, spec.TempoTxShape, minGas)
+			"erc20_transfer_gas %d is below the floor for tx_shape %q%s (%d); transactions would be rejected",
+			spec.ERC20TransferGas, spec.TempoTxShape, onKeys, minGas)
 	}
 	return nil
 }
@@ -100,6 +110,9 @@ func (tempoRuntime) EnrichSpec(spec *messages.BenchmarkSpec) error {
 func (t tempoRuntime) Bootstrap(ctx context.Context, spec messages.BenchmarkSpec, nodes []messages.NodeTarget) error {
 	if spec.Fullnodes > 0 {
 		return fmt.Errorf("tempo runtime does not support fullnodes yet (got %d)", spec.Fullnodes)
+	}
+	if spec.RemoteRPCURL != "" {
+		return bootstrapTempoRemote(ctx, spec, nodes)
 	}
 	if spec.RunnerType == "docker" {
 		// Bootstrap runs more than once per benchmark (benchctl gen, then the
@@ -164,6 +177,9 @@ func tempoComposeArgs(spec messages.BenchmarkSpec, args ...string) []string {
 // 8545, and launches `<binary> start --home`), none of which matches a Tempo
 // devnet, so it must be refused rather than silently mis-run.
 func (tempoRuntime) Validate(spec messages.BenchmarkSpec) error {
+	if spec.RemoteRPCURL != "" {
+		return validateTempoRemote(spec)
+	}
 	if spec.RunnerType == "docker" {
 		// Compose owns the container lifecycle for the whole cluster, so the
 		// per-node launcher must stay out of the way. RunNode then waits for
@@ -249,7 +265,14 @@ func (tempoRuntime) ProduceTxs(
 	target messages.NodeTarget,
 	txPath string,
 ) (int, error) {
-	raws, err := generateTempoNativeTxs(ctx, spec, target)
+	var startNonces map[common.Address][]uint64
+	if spec.RemoteRPCURL != "" {
+		var err error
+		if startNonces, err = tempoRemoteNonces(ctx, spec, target); err != nil {
+			return 0, err
+		}
+	}
+	raws, err := generateTempoNativeTxs(ctx, spec, target, startNonces)
 	if err != nil {
 		return 0, fmt.Errorf("generate native tempo txs: %w", err)
 	}

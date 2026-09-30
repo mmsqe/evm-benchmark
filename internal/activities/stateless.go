@@ -76,6 +76,9 @@ func (a *Activity) GenerateLayout(ctx context.Context, req messages.GenerateLayo
 		hostEVMRPCPort := spec.EVMRPCPort + globalSeq
 
 		rpcURL := fmt.Sprintf("http://127.0.0.1:%d", chain.EVMRPCPort(spec, globalSeq))
+		if spec.RemoteRPCURL != "" {
+			rpcURL = spec.RemoteRPCURL
+		}
 		tmURL := fmt.Sprintf("http://127.0.0.1:%d", spec.RPCPort)
 		if spec.RunnerType == "docker" {
 			tmURL = fmt.Sprintf("http://127.0.0.1:%d", hostRPCPort)
@@ -593,13 +596,16 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 			return messages.NodeRunResult{}, fmt.Errorf("wait consensus rpc: %w", err)
 		}
 	}
-	if err := bench.WaitForPort(ctx, host, evmPort, 2*time.Minute); err != nil {
-		if spec.RunnerType == "docker" {
-			if logPath, dumpErr := dumpDockerLogs(spec, target, containerName, "startup-evm-rpc"); dumpErr == nil {
-				return messages.NodeRunResult{}, fmt.Errorf("wait evm rpc: %w (docker logs: %s)", err, logPath)
+	// A remote endpoint has no local port; doRun's ready-height check covers it.
+	if spec.RemoteRPCURL == "" {
+		if err := bench.WaitForPort(ctx, host, evmPort, 2*time.Minute); err != nil {
+			if spec.RunnerType == "docker" {
+				if logPath, dumpErr := dumpDockerLogs(spec, target, containerName, "startup-evm-rpc"); dumpErr == nil {
+					return messages.NodeRunResult{}, fmt.Errorf("wait evm rpc: %w (docker logs: %s)", err, logPath)
+				}
 			}
+			return messages.NodeRunResult{}, fmt.Errorf("wait evm rpc: %w", err)
 		}
-		return messages.NodeRunResult{}, fmt.Errorf("wait evm rpc: %w", err)
 	}
 
 	transport := &http.Transport{
@@ -616,6 +622,9 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 	client := &http.Client{Timeout: 10 * time.Second, Transport: transport}
 	defer transport.CloseIdleConnections()
 	rpcURL := fmt.Sprintf("http://127.0.0.1:%d", evmPort)
+	if spec.RemoteRPCURL != "" {
+		rpcURL = spec.RemoteRPCURL
+	}
 
 	spec.BroadcastConcurrency = broadcastConcurrency
 	return doRun(ctx, client, spec, target, rpcURL, txs)
@@ -686,8 +695,21 @@ func doRun(
 		}
 	}
 
+	// A shared chain carries everyone's transactions: count only the hashes the
+	// node returned for ours, from the block the run started at.
+	shared := spec.RemoteRPCURL != ""
+	statsFrom := int64(2)
+	if shared {
+		head, err := bench.CurrentHeight(ctx, client, rpcURL)
+		if err != nil {
+			return messages.NodeRunResult{}, fmt.Errorf("start height: %w", err)
+		}
+		statsFrom = head + 1
+	}
+
 	sendStats := bench.BroadcastRawTxs(ctx, client, rpcURL, txs,
-		spec.BroadcastConcurrency, spec.BroadcastPendingWatermark, spec.BroadcastBatchSize)
+		spec.BroadcastConcurrency, spec.BroadcastPendingWatermark, spec.BroadcastBatchSize, shared)
+	own := sendStats.Accepted
 	logger.Info("broadcast complete",
 		"node", target.GlobalSeq,
 		"seconds", sendStats.Duration.Seconds(),
@@ -696,14 +718,13 @@ func doRun(
 		"rejected", sendStats.Rejected,
 	)
 
-	if err := bench.DetectIdleOrHalt(
-		ctx,
-		client,
-		rpcURL,
-		spec.NumIdle,
-		time.Duration(spec.IdlePollIntervalSeconds)*time.Second,
-		time.Duration(spec.ChainHaltIntervalSeconds)*time.Second,
-	); err != nil {
+	pollInterval := time.Duration(spec.IdlePollIntervalSeconds) * time.Second
+	haltAfter := time.Duration(spec.ChainHaltIntervalSeconds) * time.Second
+	if shared {
+		if err := bench.WaitForTxs(ctx, client, rpcURL, own, statsFrom, spec.NumIdle, pollInterval, haltAfter); err != nil {
+			return messages.NodeRunResult{}, fmt.Errorf("wait for own txs: %w", err)
+		}
+	} else if err := bench.DetectIdleOrHalt(ctx, client, rpcURL, spec.NumIdle, pollInterval, haltAfter); err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("wait idle/halt: %w", err)
 	}
 
@@ -733,6 +754,13 @@ func doRun(
 		sendStats.Rejected); err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("write send summary: %w", err)
 	}
+	if sendStats.PoolUnknown && sendStats.Sent > 0 {
+		if _, err := fmt.Fprintf(statsFile,
+			"send_warning the pool was never read (no txpool_status, or too small a load to sample), so "+
+				"whether the chain ever fell behind the sender is unknown: this rate is a lower bound.\n"); err != nil {
+			return messages.NodeRunResult{}, fmt.Errorf("write send warning: %w", err)
+		}
+	}
 	if sendStats.Undersaturated() {
 		// Passing the whole-seconds check does not imply this: a run can span
 		// plenty of seconds while the chain drains everything as it arrives.
@@ -747,7 +775,7 @@ func doRun(
 			"node", target.GlobalSeq, "max_pending", sendStats.MaxPending, "sent", sendStats.Sent)
 	}
 
-	stats, err := bench.DumpBlockStats(ctx, statsFile, client, rpcURL, 2, end, len(txs))
+	stats, err := bench.DumpBlockStats(ctx, statsFile, client, rpcURL, statsFrom, end, len(txs), own)
 	if err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("dump block stats: %w", err)
 	}
