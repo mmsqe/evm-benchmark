@@ -189,6 +189,8 @@ scripts/run-benchmark.sh --mode tempo-remote run   # examples/config.tempo.moder
 - `tempo_faucet: true` funds senders that cannot cover the run's worst-case
   fees via `tempo_fundAddress`.
 - Nonces are read from the chain, so accounts can be reused.
+- Each account's transactions go out in nonce order, every worker owning whole
+  accounts, so `broadcast_concurrency` above `num_accounts` adds nothing.
 - A run that leaves senders stuck in the node's pool blocks the next one at
   prepare; `go run ./cmd/unstick -config <config>` clears them.
 - Only this run's transactions count, by the hash the node returned (Tempo

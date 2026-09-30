@@ -709,8 +709,25 @@ func doRun(
 		statsFrom = head + 1
 	}
 
-	sendStats := bench.BroadcastRawTxs(ctx, client, rpcURL, txs,
-		spec.BroadcastConcurrency, spec.BroadcastPendingWatermark, spec.BroadcastBatchSize, shared)
+	opts := bench.BroadcastOptions{
+		Concurrency:   spec.BroadcastConcurrency,
+		BatchSize:     spec.BroadcastBatchSize,
+		Watermark:     spec.BroadcastPendingWatermark,
+		TrackAccepted: shared,
+	}
+	var sendStats bench.BroadcastStats
+	if shared {
+		// A node that is not the block producer must see each account's
+		// nonces in order (see BroadcastStreams). The file holds each
+		// account's transactions contiguously.
+		accounts := make([][]string, 0, spec.NumAccounts)
+		for start := 0; start < len(txs); start += spec.NumTxs {
+			accounts = append(accounts, txs[start:min(start+spec.NumTxs, len(txs))])
+		}
+		sendStats = bench.BroadcastStreams(ctx, client, rpcURL, accounts, opts)
+	} else {
+		sendStats = bench.BroadcastRawTxs(ctx, client, rpcURL, txs, opts)
+	}
 	own := sendStats.Accepted
 	logger.Info("broadcast complete",
 		"node", target.GlobalSeq,

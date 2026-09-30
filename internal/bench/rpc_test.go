@@ -219,7 +219,8 @@ func TestBroadcastTracksAcceptedHashes(t *testing.T) {
 		txs[i] = fmt.Sprintf("0x%03d", i)
 	}
 	txs[5], txs[6] = "0xbad3", "0xbad4"
-	stats := BroadcastRawTxs(context.Background(), srv.Client(), srv.URL, txs, 1, -1, 100, true)
+	stats := BroadcastRawTxs(context.Background(), srv.Client(), srv.URL, txs,
+		BroadcastOptions{Concurrency: 1, BatchSize: 100, Watermark: -1, TrackAccepted: true})
 
 	// Two rejections that differ only in their numbers are one reason.
 	if want := map[string]int{"nonce too low: next nonce N, tx nonce N": 2}; stats.Rejected != 2 || fmt.Sprint(stats.RejectReasons) != fmt.Sprint(want) {
@@ -236,8 +237,52 @@ func TestBroadcastTracksAcceptedHashes(t *testing.T) {
 			stats.PoolUnknown, stats.Undersaturated())
 	}
 
-	untracked := BroadcastRawTxs(context.Background(), srv.Client(), srv.URL, txs[:10], 1, -1, 5, false)
+	untracked := BroadcastRawTxs(context.Background(), srv.Client(), srv.URL, txs[:10],
+		BroadcastOptions{Concurrency: 1, BatchSize: 5, Watermark: -1})
 	if untracked.Accepted != nil {
 		t.Error("hashes collected without being asked for")
+	}
+}
+
+// TestBroadcastStreamsKeepsEachStreamInOrder pins what a remote run relies on:
+// with many workers in flight, no transaction of an account reaches the node
+// before the one ahead of it, and every one is sent.
+func TestBroadcastStreamsKeepsEachStreamInOrder(t *testing.T) {
+	var mu sync.Mutex
+	arrived := map[string][]int{}
+	srv := fakeRPC(t, func(method string, params json.RawMessage) (interface{}, string) {
+		var raws []string
+		_ = json.Unmarshal(params, &raws)
+		var account string
+		var nonce int
+		_, _ = fmt.Sscanf(strings.Replace(raws[0], "-", " ", 1), "%s %d", &account, &nonce)
+		mu.Lock()
+		arrived[account] = append(arrived[account], nonce)
+		mu.Unlock()
+		time.Sleep(time.Duration(nonce%3) * time.Millisecond) // uneven replies reorder unordered sends
+		return "0xhash", ""
+	})
+
+	streams := make([][]string, 8)
+	for a := range streams {
+		for n := 0; n < 50; n++ {
+			streams[a] = append(streams[a], fmt.Sprintf("0x%x-%d", a, n))
+		}
+	}
+	stats := BroadcastStreams(context.Background(), srv.Client(), srv.URL, streams,
+		BroadcastOptions{Concurrency: 4, BatchSize: 10, Watermark: -1})
+
+	if stats.Sent != 400 {
+		t.Errorf("sent %d, want 400", stats.Sent)
+	}
+	for account, nonces := range arrived {
+		if len(nonces) != 50 {
+			t.Errorf("account %s: %d arrived, want 50", account, len(nonces))
+		}
+		for i, n := range nonces {
+			if n != i {
+				t.Fatalf("account %s: nonce %d arrived in position %d", account, n, i)
+			}
+		}
 	}
 }

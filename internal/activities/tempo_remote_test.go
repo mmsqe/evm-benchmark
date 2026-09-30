@@ -269,8 +269,7 @@ func TestTempoRemoteBootstrapRejectsWrongChain(t *testing.T) {
 
 // TestTempoRemoteProduceTxsStartsFromChainNonces: accounts on a live chain
 // have sent before, so each lane starts at its on-chain nonce — the account's
-// own for key 0, the nonce precompile's for user keys — and accounts take
-// turns so no sender's backlog runs ahead.
+// own for key 0, the nonce precompile's for user keys.
 func TestTempoRemoteProduceTxsStartsFromChainNonces(t *testing.T) {
 	chain := newFakeTempo()
 	srv := chain.serve(t)
@@ -305,9 +304,8 @@ func TestTempoRemoteProduceTxsStartsFromChainNonces(t *testing.T) {
 		return raw
 	}
 	want := []string{
-		mk(1, a, 0, 7), mk(2, b, 0, 0),
-		mk(1, a, 1, 3), mk(2, b, 1, 0),
-		mk(1, a, 0, 8), mk(2, b, 0, 1),
+		mk(1, a, 0, 7), mk(1, a, 1, 3), mk(1, a, 0, 8),
+		mk(2, b, 0, 0), mk(2, b, 1, 0), mk(2, b, 0, 1),
 	}
 	if len(raws) != len(want) {
 		t.Fatalf("got %d txs, want %d", len(raws), len(want))

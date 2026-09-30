@@ -288,30 +288,89 @@ func awaitPoolRoom(ctx context.Context, client *http.Client, rpcURL string, wate
 	}
 }
 
-// BroadcastRawTxs sends every transaction, pausing while more than watermark
-// are pending. Negative never pauses; 0 uses DefaultPendingWatermark. With
-// trackAccepted, the returned stats carry the accepted transactions' hashes.
-func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, txs []string, concurrency int, watermark int64, batchSize int, trackAccepted bool) BroadcastStats {
-	if concurrency < 1 {
-		concurrency = 1
-	}
-	switch {
-	case watermark < 0:
-		watermark = math.MaxInt64 // never pause
-	case watermark == 0:
-		watermark = DefaultPendingWatermark
-	}
-	if batchSize < 1 {
-		batchSize = 1
-	}
+// BroadcastOptions shapes a send.
+type BroadcastOptions struct {
+	Concurrency int // requests in flight
+	BatchSize   int // transactions per request; 1 skips JSON-RPC batching
+	// Watermark pauses sending while more transactions are pending. Negative
+	// never pauses; 0 uses DefaultPendingWatermark.
+	Watermark int64
+	// TrackAccepted collects the hashes the node returns into Accepted.
+	TrackAccepted bool
+}
 
+// BroadcastRawTxs sends txs in whatever order free workers take them.
+func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, txs []string, opts BroadcastOptions) BroadcastStats {
+	opts = opts.withDefaults()
+	shared := make(chan []string)
+	go func() {
+		defer close(shared)
+		for start := 0; start < len(txs); start += opts.BatchSize {
+			select {
+			case shared <- txs[start:min(start+opts.BatchSize, len(txs))]:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	queues := make([]chan []string, opts.Concurrency)
+	for w := range queues {
+		queues[w] = shared
+	}
+	return broadcast(ctx, client, rpcURL, queues, len(txs), opts)
+}
+
+// BroadcastStreams sends each stream in order: a worker owns whole streams and
+// sends one request at a time, taking its streams in turns so a batch spreads
+// over them. A node that is not the block producer may never forward a nonce
+// that arrived before its predecessor, so a remote run sends each account as a
+// stream.
+func BroadcastStreams(ctx context.Context, client *http.Client, rpcURL string, streams [][]string, opts BroadcastOptions) BroadcastStats {
+	opts = opts.withDefaults()
+	workers := min(opts.Concurrency, len(streams))
+	queues := make([]chan []string, workers)
+	total := 0
+	for w := range queues {
+		var mine []string
+		for k, more := 0, true; more; k++ {
+			more = false
+			for s := w; s < len(streams); s += workers {
+				if k < len(streams[s]) {
+					mine, more = append(mine, streams[s][k]), true
+				}
+			}
+		}
+		total += len(mine)
+		queues[w] = make(chan []string, len(mine)/opts.BatchSize+1)
+		for start := 0; start < len(mine); start += opts.BatchSize {
+			queues[w] <- mine[start:min(start+opts.BatchSize, len(mine))]
+		}
+		close(queues[w])
+	}
+	return broadcast(ctx, client, rpcURL, queues, total, opts)
+}
+
+func (o BroadcastOptions) withDefaults() BroadcastOptions {
+	o.Concurrency = max(o.Concurrency, 1)
+	o.BatchSize = max(o.BatchSize, 1)
+	switch {
+	case o.Watermark < 0:
+		o.Watermark = math.MaxInt64 // never pause
+	case o.Watermark == 0:
+		o.Watermark = DefaultPendingWatermark
+	}
+	return o
+}
+
+// broadcast runs one worker per queue, each sending its queue's batches.
+func broadcast(ctx context.Context, client *http.Client, rpcURL string, queues []chan []string, total int, opts BroadcastOptions) BroadcastStats {
 	// Polling the pool before every transaction doubles the RPC cost of a send.
 	// When the watermark cannot be reached by this load it can never pause, so
 	// sample it periodically for the diagnostic instead of gating on it.
 	// Counted in transactions, not requests, so batching does not silently turn
-	// the sample rate down by a factor of batchSize.
+	// the sample rate down by a factor of the batch size.
 	pollEvery := 1
-	if watermark >= int64(len(txs)) {
+	if opts.Watermark >= int64(total) {
 		pollEvery = 256
 	}
 
@@ -324,21 +383,20 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 		accepted TxSet
 		reasons  = map[string]int{}
 	)
-	if trackAccepted {
-		accepted = make(TxSet, len(txs))
+	if opts.TrackAccepted {
+		accepted = make(TxSet, total)
 	}
-	jobs := make(chan []string)
 	var wg sync.WaitGroup
-	for i := 0; i < concurrency; i++ {
+	for _, queue := range queues {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			sincePoll := 0
-			for chunk := range jobs {
+			for chunk := range queue {
 				sincePoll += len(chunk)
 				if sincePoll >= pollEvery {
 					sincePoll = 0
-					if !awaitPoolRoom(ctx, client, rpcURL, watermark, &maxPending, &stalled) {
+					if !awaitPoolRoom(ctx, client, rpcURL, opts.Watermark, &maxPending, &stalled) {
 						return
 					}
 				}
@@ -365,11 +423,6 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 			}
 		}()
 	}
-
-	for start := 0; start < len(txs); start += batchSize {
-		jobs <- txs[start:min(start+batchSize, len(txs))]
-	}
-	close(jobs)
 	wg.Wait()
 
 	rejected := 0
@@ -377,7 +430,7 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 		rejected += n
 	}
 	return BroadcastStats{
-		Sent:          len(txs),
+		Sent:          total,
 		Duration:      time.Since(started),
 		MaxPending:    max(maxPending.Load(), 0),
 		Rejected:      rejected,

@@ -62,9 +62,8 @@ func tempoUsesUserNonceKeys(spec messages.BenchmarkSpec) bool {
 }
 
 // generateTempoNativeTxs derives this node's accounts and signs NumTxs native
-// transactions each, returning the raw hex strings in per-account order (in
-// rounds across accounts on a remote chain). Signing is parallelised across
-// accounts. startNonces gives an account's
+// transactions each, returning the raw hex strings in per-account order.
+// Signing is parallelised across accounts. startNonces gives an account's
 // first nonce per lane; unlisted accounts start at 0, as on a fresh devnet.
 func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, target messages.NodeTarget, startNonces map[common.Address][]uint64) ([]string, error) {
 	if spec.NumAccounts < 1 || spec.NumTxs < 1 {
@@ -209,19 +208,8 @@ feed:
 	}
 
 	raws := make([]string, 0, spec.NumAccounts*spec.NumTxs)
-	if spec.RemoteRPCURL == "" {
-		for _, batch := range batches {
-			raws = append(raws, batch...)
-		}
-		return raws, nil
-	}
-	// A public node keeps its default per-sender pool limit (reth: 16 pending),
-	// so send in rounds — every account's first, then every second — rather
-	// than one account's whole run at once.
-	for i := 0; i < spec.NumTxs; i++ {
-		for _, batch := range batches {
-			raws = append(raws, batch[i])
-		}
+	for _, batch := range batches {
+		raws = append(raws, batch...)
 	}
 	return raws, nil
 }

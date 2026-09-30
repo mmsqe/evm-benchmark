@@ -91,8 +91,8 @@ func main() {
 			fatal("read the pool (txpool_inspect): %v", err)
 		}
 
-		stuck, stuckSenders := 0, 0
-		var raws []string
+		stuck, stuckSenders, replacing := 0, 0, 0
+		var streams [][]string // one per sender, in nonce order
 		for i, s := range senders {
 			latest, top := quantity(counts[i]), tops[s.addr]
 			if top <= latest {
@@ -100,6 +100,7 @@ func main() {
 			}
 			stuck += int(top - latest)
 			stuckSenders++
+			var raws []string
 			for _, nonce := range s.due(latest, top, *window) {
 				raw, err := s.replacement(signer, nonce)
 				if err != nil {
@@ -107,16 +108,19 @@ func main() {
 				}
 				raws = append(raws, raw)
 			}
+			streams = append(streams, raws)
+			replacing += len(raws)
 		}
 		if stuck == 0 {
 			fmt.Println("[unstick] no transactions left in the pool for these senders")
 			return
 		}
 
-		line := fmt.Sprintf("[unstick] %d stuck across %d senders; replacing %d", stuck, stuckSenders, len(raws))
-		if len(raws) > 0 {
-			stats := bench.BroadcastRawTxs(ctx, client, spec.RemoteRPCURL, raws,
-				spec.BroadcastConcurrency, -1, spec.BroadcastBatchSize, false)
+		line := fmt.Sprintf("[unstick] %d stuck across %d senders; replacing %d", stuck, stuckSenders, replacing)
+		if replacing > 0 {
+			stats := bench.BroadcastStreams(ctx, client, spec.RemoteRPCURL, streams, bench.BroadcastOptions{
+				Concurrency: spec.BroadcastConcurrency, BatchSize: spec.BroadcastBatchSize, Watermark: -1,
+			})
 			if stats.Rejected > 0 {
 				line += fmt.Sprintf(" (rejected %d: %v)", stats.Rejected, stats.RejectReasons)
 			}
