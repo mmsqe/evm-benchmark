@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -753,6 +755,13 @@ func doRun(
 		sendStats.Sent, sendStats.Duration.Seconds(), sendStats.Rate(), sendStats.MaxPending,
 		sendStats.Rejected); err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("write send summary: %w", err)
+	}
+	reasons := slices.Collect(maps.Keys(sendStats.RejectReasons))
+	slices.SortFunc(reasons, func(a, b string) int { return sendStats.RejectReasons[b] - sendStats.RejectReasons[a] })
+	for _, msg := range reasons {
+		if _, err := fmt.Fprintf(statsFile, "send_reject count=%d reason=%q\n", sendStats.RejectReasons[msg], msg); err != nil {
+			return messages.NodeRunResult{}, fmt.Errorf("write send rejects: %w", err)
+		}
 	}
 	if sendStats.PoolUnknown && sendStats.Sent > 0 {
 		if _, err := fmt.Fprintf(statsFile,

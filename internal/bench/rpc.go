@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,7 +96,7 @@ func retryAfter(header string) time.Duration {
 // trip per transaction caps the sender near 50k tx/s on loopback, which is
 // below what a fast chain can execute — at that point the benchmark measures
 // submission, not the chain.
-func sendRawTxBatch(ctx context.Context, client *http.Client, url string, raws []string) (accepted []string, rejected int, err error) {
+func sendRawTxBatch(ctx context.Context, client *http.Client, url string, raws []string) (accepted, rejected []string, err error) {
 	batch := make([]jsonRPCRequest, 0, len(raws))
 	for i, raw := range raws {
 		batch = append(batch, jsonRPCRequest{
@@ -107,19 +108,23 @@ func sendRawTxBatch(ctx context.Context, client *http.Client, url string, raws [
 	// treat that as a hard error rather than silently losing the batch.
 	var responses []jsonRPCResponse
 	if err := postJSON(ctx, client, url, batch, &responses); err != nil {
-		return nil, 0, fmt.Errorf("send batch (does this node support JSON-RPC batches?): %w", err)
+		return nil, nil, fmt.Errorf("send batch (does this node support JSON-RPC batches?): %w", err)
 	}
 	for _, r := range responses {
 		var hash string
 		switch {
 		case r.Error != nil:
-			rejected++
+			rejected = append(rejected, r.Error.Message)
 		case json.Unmarshal(r.Result, &hash) == nil:
 			accepted = append(accepted, hash)
 		}
 	}
 	return accepted, rejected, nil
 }
+
+// numbers masks the nonces, hashes and amounts in a rejection message, so one
+// cause counts as one reason.
+var numbers = regexp.MustCompile(`0x[0-9a-fA-F]+|\d+`)
 
 // RPCCall is one call of a JSONRPCBatch.
 type RPCCall struct {
@@ -199,10 +204,12 @@ type BroadcastStats struct {
 	Sent       int
 	Duration   time.Duration
 	MaxPending int64
-	// Rejected counts transactions the node refused at submission. Single-send
-	// mode cannot see this (the response is discarded); batch mode reports it,
-	// which turns a silent "included < sent" into a diagnosable one.
-	Rejected int
+	// Rejected counts transactions the node refused at submission, and
+	// RejectReasons groups them by its message. Single-send mode cannot see
+	// this (the response is discarded); batch mode reports it, which turns a
+	// silent "included < sent" into a diagnosable one.
+	Rejected      int
+	RejectReasons map[string]int
 	// PoolUnknown means the pool was never read — the endpoint does not serve
 	// txpool_status, or the load ended before the first sample — so MaxPending
 	// is not a measurement.
@@ -291,11 +298,12 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 	}
 
 	started := time.Now()
-	var maxPending, rejected atomic.Int64
+	var maxPending atomic.Int64
 	maxPending.Store(-1) // until a sample succeeds
 	var (
 		mu       sync.Mutex
 		accepted TxSet
+		reasons  = map[string]int{}
 	)
 	if trackAccepted {
 		accepted = make(TxSet, len(txs))
@@ -318,21 +326,23 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 
 				// batchSize 1 keeps the plain single-request path, so a node
 				// that does not implement JSON-RPC batches still works.
-				var hashes []string
+				var hashes, refused []string
 				if len(chunk) == 1 {
 					var hash string
 					if JSONRPCCall(ctx, client, rpcURL, "eth_sendRawTransaction", chunk, &hash) == nil {
 						hashes = []string{hash}
 					}
-				} else if sent, n, err := sendRawTxBatch(ctx, client, rpcURL, chunk); err == nil {
-					rejected.Add(int64(n))
-					hashes = sent
+				} else if sent, rejected, err := sendRawTxBatch(ctx, client, rpcURL, chunk); err == nil {
+					hashes, refused = sent, rejected
+				}
+				mu.Lock()
+				for _, msg := range refused {
+					reasons[numbers.ReplaceAllString(msg, "N")]++
 				}
 				if accepted != nil {
-					mu.Lock()
 					accepted.add(hashes...)
-					mu.Unlock()
 				}
+				mu.Unlock()
 			}
 		}()
 	}
@@ -343,13 +353,18 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 	close(jobs)
 	wg.Wait()
 
+	rejected := 0
+	for _, n := range reasons {
+		rejected += n
+	}
 	return BroadcastStats{
-		Sent:        len(txs),
-		Duration:    time.Since(started),
-		MaxPending:  max(maxPending.Load(), 0),
-		Rejected:    int(rejected.Load()),
-		PoolUnknown: maxPending.Load() < 0,
-		Accepted:    accepted,
+		Sent:          len(txs),
+		Duration:      time.Since(started),
+		MaxPending:    max(maxPending.Load(), 0),
+		Rejected:      rejected,
+		RejectReasons: reasons,
+		PoolUnknown:   maxPending.Load() < 0,
+		Accepted:      accepted,
 	}
 }
 

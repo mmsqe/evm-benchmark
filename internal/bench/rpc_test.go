@@ -159,8 +159,8 @@ func TestBroadcastTracksAcceptedHashes(t *testing.T) {
 		case "eth_sendRawTransaction":
 			var raws []string
 			_ = json.Unmarshal(params, &raws)
-			if raws[0] == "0xbad" {
-				return nil, "nonce too low"
+			if strings.HasPrefix(raws[0], "0xbad") {
+				return nil, "nonce too low: next nonce 7, tx nonce " + raws[0][5:]
 			}
 			return "0xHASH-" + raws[0], ""
 		}
@@ -171,14 +171,15 @@ func TestBroadcastTracksAcceptedHashes(t *testing.T) {
 	for i := range txs {
 		txs[i] = fmt.Sprintf("0x%03d", i)
 	}
-	txs[5] = "0xbad"
+	txs[5], txs[6] = "0xbad3", "0xbad4"
 	stats := BroadcastRawTxs(context.Background(), srv.Client(), srv.URL, txs, 1, -1, 100, true)
 
-	if stats.Rejected != 1 {
-		t.Errorf("rejected = %d, want 1", stats.Rejected)
+	// Two rejections that differ only in their numbers are one reason.
+	if want := map[string]int{"nonce too low: next nonce N, tx nonce N": 2}; stats.Rejected != 2 || fmt.Sprint(stats.RejectReasons) != fmt.Sprint(want) {
+		t.Errorf("rejected = %d %v, want 2 %v", stats.Rejected, stats.RejectReasons, want)
 	}
-	if len(stats.Accepted) != 599 {
-		t.Errorf("accepted = %d hashes, want 599", len(stats.Accepted))
+	if len(stats.Accepted) != 598 {
+		t.Errorf("accepted = %d hashes, want 598", len(stats.Accepted))
 	}
 	if _, ok := stats.Accepted["0xhash-0x000"]; !ok {
 		t.Error("accepted set is missing the node-returned (lower-cased) hash")
