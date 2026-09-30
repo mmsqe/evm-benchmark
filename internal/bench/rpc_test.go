@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // rpcHandler answers one JSON-RPC call: a result, or an error message.
@@ -145,6 +146,52 @@ func TestJSONRPCBatchFailsOnCallError(t *testing.T) {
 		[]RPCCall{{Method: "ok"}, {Method: "bad"}}, 10)
 	if err == nil || !strings.Contains(err.Error(), "bad") {
 		t.Fatalf("err = %v, want the failing call named", err)
+	}
+}
+
+// TestWatermarkIgnoresQueued pins the deadlock fix: queued transactions wait
+// on nonces a paused sender may be holding, so a pool deep only in queued ones
+// must not keep the sender paused.
+func TestWatermarkIgnoresQueued(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"pending":"0x10","queued":"0x100000"}}`)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var deepest atomic.Int64
+	var stalled atomic.Bool
+	if !awaitPoolRoom(ctx, srv.Client(), srv.URL, 100, &deepest, &stalled) {
+		t.Fatal("paused on queued transactions: a sender holding their missing nonces would never resume")
+	}
+	if deepest.Load() != 16 {
+		t.Errorf("recorded depth %d, want the 16 executable ones", deepest.Load())
+	}
+}
+
+// TestWatermarkGivesUpOnStuckPool: transactions a node never forwards stay
+// pending forever, so a pool that stops draining must end the wait, and no
+// sender waits on it again.
+func TestWatermarkGivesUpOnStuckPool(t *testing.T) {
+	defer func(d time.Duration) { poolStallTimeout = d }(poolStallTimeout)
+	poolStallTimeout = 200 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"pending":"0xc42","queued":"0x0"}}`)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var deepest atomic.Int64
+	var stalled atomic.Bool
+	if !awaitPoolRoom(ctx, srv.Client(), srv.URL, 3000, &deepest, &stalled) || !stalled.Load() {
+		t.Fatal("kept waiting on a pool stuck above the watermark")
+	}
+	start := time.Now()
+	awaitPoolRoom(ctx, srv.Client(), srv.URL, 3000, &deepest, &stalled)
+	if time.Since(start) > 100*time.Millisecond {
+		t.Error("waited again after the pool was found stuck")
 	}
 }
 

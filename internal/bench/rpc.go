@@ -214,6 +214,9 @@ type BroadcastStats struct {
 	// txpool_status, or the load ended before the first sample — so MaxPending
 	// is not a measurement.
 	PoolUnknown bool
+	// PoolStalled means the pool stopped draining above the watermark, so the
+	// rest of the load was sent without waiting (see poolStallTimeout).
+	PoolStalled bool
 	// Accepted holds the hashes the node returned, when asked for.
 	Accepted TxSet
 }
@@ -244,12 +247,20 @@ func (b BroadcastStats) Rate() float64 {
 	return float64(b.Sent) / b.Duration.Seconds()
 }
 
-// awaitPoolRoom samples the pool, recording its depth, and waits while it is
-// above the watermark. Reports false if the context ended.
-func awaitPoolRoom(ctx context.Context, client *http.Client, rpcURL string, watermark int64, deepest *atomic.Int64) bool {
+// poolStallTimeout bounds a wait on a pool that has stopped draining.
+var poolStallTimeout = 2 * time.Minute
+
+// awaitPoolRoom samples the pool, recording its depth, and waits while more
+// than watermark transactions are executable. Reports false if the context
+// ended. Neither of the things that cannot drain is waited on: queued
+// transactions, which wait on nonces a paused sender may hold, and a pool that
+// has not drained for poolStallTimeout, which a node that never forwards some
+// transactions leaves behind (stalled is then set, and no sender waits again).
+func awaitPoolRoom(ctx context.Context, client *http.Client, rpcURL string, watermark int64, deepest *atomic.Int64, stalled *atomic.Bool) bool {
 	const backoff = 100 * time.Millisecond
+	lowest, since := int64(math.MaxInt64), time.Now()
 	for {
-		pending, err := TxPoolPendingCount(ctx, client, rpcURL)
+		pending, _, err := TxPoolStatus(ctx, client, rpcURL)
 		if err != nil {
 			return true // a pool we cannot read cannot throttle us
 		}
@@ -259,7 +270,14 @@ func awaitPoolRoom(ctx context.Context, client *http.Client, rpcURL string, wate
 				break
 			}
 		}
-		if pending <= watermark {
+		if pending <= watermark || stalled.Load() {
+			return true
+		}
+		if pending < lowest {
+			lowest, since = pending, time.Now()
+		} else if time.Since(since) >= poolStallTimeout {
+			stalled.Store(true)
+			fmt.Printf("[bench] pool stuck at %d pending for %s: sending the rest without waiting\n", pending, poolStallTimeout)
 			return true
 		}
 		select {
@@ -300,6 +318,7 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 	started := time.Now()
 	var maxPending atomic.Int64
 	maxPending.Store(-1) // until a sample succeeds
+	var stalled atomic.Bool
 	var (
 		mu       sync.Mutex
 		accepted TxSet
@@ -319,7 +338,7 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 				sincePoll += len(chunk)
 				if sincePoll >= pollEvery {
 					sincePoll = 0
-					if !awaitPoolRoom(ctx, client, rpcURL, watermark, &maxPending) {
+					if !awaitPoolRoom(ctx, client, rpcURL, watermark, &maxPending, &stalled) {
 						return
 					}
 				}
@@ -364,6 +383,7 @@ func BroadcastRawTxs(ctx context.Context, client *http.Client, rpcURL string, tx
 		Rejected:      rejected,
 		RejectReasons: reasons,
 		PoolUnknown:   maxPending.Load() < 0,
+		PoolStalled:   stalled.Load(),
 		Accepted:      accepted,
 	}
 }
@@ -412,20 +432,23 @@ type txPoolStatus struct {
 	Queued  string `json:"queued"`
 }
 
-func TxPoolPendingCount(ctx context.Context, client *http.Client, rpcURL string) (int64, error) {
+// TxPoolStatus returns how many pooled transactions are executable (pending)
+// and how many wait on a missing lower nonce (queued).
+func TxPoolStatus(ctx context.Context, client *http.Client, rpcURL string) (pending, queued int64, err error) {
 	var status txPoolStatus
 	if err := JSONRPCCall(ctx, client, rpcURL, "txpool_status", []interface{}{}, &status); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
+	if pending, err = strconv.ParseInt(status.Pending, 0, 64); err != nil {
+		return 0, 0, fmt.Errorf("parse txpool pending %q: %w", status.Pending, err)
+	}
+	if queued, err = strconv.ParseInt(status.Queued, 0, 64); err != nil {
+		return 0, 0, fmt.Errorf("parse txpool queued %q: %w", status.Queued, err)
+	}
+	return pending, queued, nil
+}
 
-	pending, err := strconv.ParseInt(status.Pending, 0, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse txpool pending %q: %w", status.Pending, err)
-	}
-	queued, err := strconv.ParseInt(status.Queued, 0, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse txpool queued %q: %w", status.Queued, err)
-	}
-
-	return pending + queued, nil
+func TxPoolPendingCount(ctx context.Context, client *http.Client, rpcURL string) (int64, error) {
+	pending, queued, err := TxPoolStatus(ctx, client, rpcURL)
+	return pending + queued, err
 }

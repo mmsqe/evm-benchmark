@@ -763,6 +763,13 @@ func doRun(
 			return messages.NodeRunResult{}, fmt.Errorf("write send rejects: %w", err)
 		}
 	}
+	if sendStats.PoolStalled {
+		if _, err := fmt.Fprintf(statsFile,
+			"send_warning the pool stopped draining above the watermark, so the rest was sent without waiting: "+
+				"the node may be holding transactions it never forwards.\n"); err != nil {
+			return messages.NodeRunResult{}, fmt.Errorf("write send warning: %w", err)
+		}
+	}
 	if sendStats.PoolUnknown && sendStats.Sent > 0 {
 		if _, err := fmt.Fprintf(statsFile,
 			"send_warning the pool was never read (no txpool_status, or too small a load to sample), so "+
