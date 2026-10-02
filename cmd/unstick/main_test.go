@@ -73,8 +73,17 @@ func TestReplacementIsSignedBySender(t *testing.T) {
 		t.Fatal(err)
 	}
 	from, err := types.Sender(signer, &tx)
-	if err != nil || from != s.addr || tx.Nonce() != 369 || tx.GasFeeCap().Cmp(s.price) != 0 {
-		t.Errorf("from=%s nonce=%d fee=%s, want %s 369 %s", from.Hex(), tx.Nonce(), tx.GasFeeCap(), s.addr.Hex(), s.price)
+	if err != nil || from != s.addr || tx.Nonce() != 369 || tx.GasFeeCap().Cmp(s.price) != 0 || tx.Gas() != replacementGas {
+		t.Errorf("from=%s nonce=%d fee=%s gas=%d, want %s 369 %s %d", from.Hex(), tx.Nonce(), tx.GasFeeCap(), tx.Gas(), s.addr.Hex(), s.price, replacementGas)
+	}
+
+	// An account's first transaction pays account creation (~276k in all).
+	raw, err = s.replacement(signer, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.UnmarshalBinary(hexutil.MustDecode(raw)); err != nil || tx.Gas() != firstTxGas {
+		t.Errorf("nonce 0 replacement gas = %d, want %d", tx.Gas(), firstTxGas)
 	}
 }
 

@@ -34,8 +34,11 @@ import (
 )
 
 const (
-	// replacementGas covers a fee-token self-transfer (26,418 used on nvnm).
+	// replacementGas covers a fee-token self-transfer (26,418 used on nvnm);
+	// an account's first transaction also pays Tempo's ~250k account
+	// creation, so it gets firstTxGas.
 	replacementGas = 40_000
+	firstTxGas     = 300_000
 	// stallRounds is how many polls a sender may sit still with replacements
 	// outstanding before they are presumed lost and re-sent at a higher fee.
 	stallRounds = 5
@@ -204,12 +207,16 @@ func (s *sender) outbid() {
 }
 
 func (s *sender) replacement(signer types.Signer, nonce uint64) (string, error) {
+	gas := uint64(replacementGas)
+	if nonce == 0 {
+		gas = firstTxGas
+	}
 	tx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{
 		ChainID:   signer.ChainID(),
 		Nonce:     nonce,
 		GasTipCap: s.price,
 		GasFeeCap: s.price,
-		Gas:       replacementGas,
+		Gas:       gas,
 		To:        &tempotx.FeeToken,
 		Data:      tempotx.Transfer(s.addr, 1),
 	}), signer, s.key)
