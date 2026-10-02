@@ -87,6 +87,8 @@ type BenchmarkSpec struct {
 	// With remote_rpc_url: fund senders short of the run's fees through the
 	// endpoint's tempo_fundAddress faucet (testnets only).
 	TempoFaucet bool `yaml:"tempo_faucet"`
+	// With remote_rpc_url: fund short senders from account 0 of base_mnemonic.
+	TempoFundFromIndex0 bool `yaml:"tempo_fund_from_index0"`
 	// Docker mode: the devnet is generated with a compose file and the whole
 	// cluster is started by `docker compose up`, rather than one container per
 	// node as the cosmos runner does.

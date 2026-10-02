@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/mmsqe/evm-benchmark/internal/bench"
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
+	"github.com/mmsqe/evm-benchmark/internal/tempotx"
 )
 
 // Remote Tempo networks (remote_rpc_url): nothing is generated or launched.
@@ -30,7 +32,14 @@ const (
 	// units (6 decimals).
 	tempoGasPriceScale = 1_000_000_000_000
 
-	tempoFaucetTimeout = 2 * time.Minute
+	tempoFundTimeout = 2 * time.Minute
+
+	// Funding from account 0 packs this many transfers into one transaction,
+	// the most the pool admits (MAX_AA_CALLS). All are payments, so the 30M
+	// general-lane cap does not apply. A transfer that creates the
+	// recipient's balance costs ~270k gas.
+	tempoFundCallsPerTx = 32
+	tempoFundGasPerCall = 300_000
 
 	// publicTestMnemonic is what the devnet configs sign with. Its keys are
 	// published, so on a public chain its accounts are everyone's.
@@ -134,8 +143,8 @@ func tempoFeeReserve(spec messages.BenchmarkSpec) *big.Int {
 	return perTx.Mul(perTx, big.NewInt(int64(spec.NumTxs)))
 }
 
-// fundTempoSenders tops up every sender below the fee reserve through the
-// endpoint's faucet. Without tempo_faucet it only reports them.
+// fundTempoSenders tops up every sender below the fee reserve, from account 0
+// or the endpoint's faucet. With neither set it only reports them.
 func fundTempoSenders(ctx context.Context, spec messages.BenchmarkSpec, senders []common.Address) error {
 	need := tempoFeeReserve(spec)
 	short, err := tempoShortOfFees(ctx, spec, senders, need)
@@ -146,19 +155,26 @@ func fundTempoSenders(ctx context.Context, spec messages.BenchmarkSpec, senders 
 		fmt.Printf("[tempo-remote] all %d senders hold the %s fee-token units the run may spend\n", len(senders), need)
 		return nil
 	}
-	if !spec.TempoFaucet {
+	switch {
+	case spec.TempoFaucet:
+		fmt.Printf("[tempo-remote] funding %d of %d senders from the faucet\n", len(short), len(senders))
+		for _, addr := range short {
+			if err := bench.JSONRPCCall(ctx, remoteClient, spec.RemoteRPCURL, "tempo_fundAddress", []string{addr.Hex()}, nil); err != nil {
+				return fmt.Errorf("tempo_fundAddress %s: %w", addr.Hex(), err)
+			}
+		}
+	case spec.TempoFundFromIndex0:
+		if err := fundFromIndex0(ctx, spec, short, need); err != nil {
+			return err
+		}
+	default:
 		return fmt.Errorf("%d of %d senders hold less than the %s fee-token units the run may spend (first: %s); "+
-			"fund them, or set tempo_faucet: true on a testnet", len(short), len(senders), need, short[0].Hex())
+			"fund them, set tempo_fund_from_index0: true, or tempo_faucet: true on a testnet",
+			len(short), len(senders), need, short[0].Hex())
 	}
 
-	fmt.Printf("[tempo-remote] funding %d of %d senders from the faucet\n", len(short), len(senders))
-	for _, addr := range short {
-		if err := bench.JSONRPCCall(ctx, remoteClient, spec.RemoteRPCURL, "tempo_fundAddress", []string{addr.Hex()}, nil); err != nil {
-			return fmt.Errorf("tempo_fundAddress %s: %w", addr.Hex(), err)
-		}
-	}
-	// The faucet answers with transaction hashes; balances follow once mined.
-	deadline := time.Now().Add(tempoFaucetTimeout)
+	// Funding answers with transaction hashes; balances follow once mined.
+	deadline := time.Now().Add(tempoFundTimeout)
 	for {
 		if short, err = tempoShortOfFees(ctx, spec, short, need); err != nil {
 			return err
@@ -168,8 +184,8 @@ func fundTempoSenders(ctx context.Context, spec messages.BenchmarkSpec, senders 
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%d senders still hold less than %s fee-token units %s after the faucet; "+
-				"lower num_txs, erc20_transfer_gas or gas_price_wei", len(short), need, tempoFaucetTimeout)
+			return fmt.Errorf("%d senders still hold less than %s fee-token units %s after funding (first: %s)",
+				len(short), need, tempoFundTimeout, short[0].Hex())
 		}
 		select {
 		case <-ctx.Done():
@@ -177,6 +193,66 @@ func fundTempoSenders(ctx context.Context, spec messages.BenchmarkSpec, senders 
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// fundFromIndex0 sends each short sender the full reserve from account 0 of
+// base_mnemonic, which never sends during a run.
+func fundFromIndex0(ctx context.Context, spec messages.BenchmarkSpec, short []common.Address, need *big.Int) error {
+	key, err := keygen.DeterministicKey(0, 0, spec.BaseMnemonic)
+	if err != nil {
+		return fmt.Errorf("derive account 0: %w", err)
+	}
+	from := crypto.PubkeyToAddress(key.PublicKey)
+	vals, err := readNumbers(ctx, spec, []bench.RPCCall{
+		ethCall(tempoDefaultFeeToken, balanceOfSelector, from.Bytes()),
+		{Method: "eth_getTransactionCount", Params: []interface{}{from.Hex(), "pending"}},
+		{Method: "eth_gasPrice", Params: []interface{}{}},
+	})
+	if err != nil {
+		return fmt.Errorf("read account 0: %w", err)
+	}
+	balance, nonce := vals[0], vals[1].Uint64()
+	// Twice the current price, so the funding lands even if the fee moves.
+	maxFee := max(2*vals[2].Uint64(), uint64(spec.GasPriceWei))
+
+	cost := new(big.Int).Mul(need, big.NewInt(int64(len(short))))
+	cost.Add(cost, new(big.Int).SetUint64(uint64(len(short))*tempoFundGasPerCall*maxFee/tempoGasPriceScale))
+	if balance.Cmp(cost) < 0 {
+		return fmt.Errorf("account 0 (%s) holds %s fee-token units, but funding %d senders needs %s",
+			from.Hex(), balance, len(short), cost)
+	}
+
+	var raws []string
+	for group := range slices.Chunk(short, tempoFundCallsPerTx) {
+		calls := make([]tempotx.Call, len(group))
+		for i, to := range group {
+			calls[i] = tempotx.Call{To: tempotx.FeeToken, Data: tempotx.Transfer(to, need.Uint64())}
+		}
+		raw, err := (&tempotx.Tx{
+			ChainID:              uint64(spec.EVMChainID),
+			MaxPriorityFeePerGas: min(uint64(spec.TempoMaxPriorityFeePerGas), maxFee),
+			MaxFeePerGas:         maxFee,
+			GasLimit:             uint64(len(calls)) * tempoFundGasPerCall,
+			Nonce:                nonce,
+			FeeToken:             tempotx.FeeToken,
+			Calls:                calls,
+		}).SignedRaw(key)
+		if err != nil {
+			return fmt.Errorf("sign funding tx: %w", err)
+		}
+		raws = append(raws, raw)
+		nonce++
+	}
+
+	fmt.Printf("[tempo-remote] funding %d senders from account 0 (%s) in %d transactions\n", len(short), from.Hex(), len(raws))
+	// One worker, so the transactions arrive in nonce order.
+	stats := bench.BroadcastRawTxs(ctx, remoteClient, spec.RemoteRPCURL, raws,
+		bench.BroadcastOptions{BatchSize: spec.BroadcastBatchSize, Watermark: -1})
+	if stats.Rejected+stats.Failed > 0 {
+		return fmt.Errorf("funding from account 0: %d of %d transactions refused %v, %d unanswered",
+			stats.Rejected, len(raws), stats.RejectReasons, stats.Failed)
+	}
+	return nil
 }
 
 // tempoShortOfFees returns the accounts whose fee-token balance is below need.

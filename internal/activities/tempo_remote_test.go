@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -35,7 +36,11 @@ type fakeTempo struct {
 	keyNonces map[string]uint64         // "addr/key" for user keys
 	grant     *big.Int
 	funded    []common.Address
+	sent      []string // raw transactions received
 }
+
+// transferCalls finds transfer(address,uint256) calldata in a raw transaction.
+var transferCalls = regexp.MustCompile(`a9059cbb0{24}([0-9a-f]{40})([0-9a-f]{64})`)
 
 func newFakeTempo() *fakeTempo {
 	return &fakeTempo{
@@ -87,6 +92,22 @@ func (f *fakeTempo) handle(method string, params json.RawMessage) (interface{}, 
 			return word(new(big.Int).SetUint64(f.keyNonces[fmt.Sprintf("%s/%s", addr.Hex(), key)])), ""
 		}
 		return "0x", ""
+	case "eth_gasPrice":
+		return "0x23c34600", ""
+	case "eth_sendRawTransaction":
+		// Credit every fee-token transfer in the transaction, as the chain
+		// would once it lands.
+		var raw string
+		_ = json.Unmarshal(p[0], &raw)
+		f.sent = append(f.sent, raw)
+		for _, m := range transferCalls.FindAllStringSubmatch(strings.ToLower(raw), -1) {
+			a, amount := common.HexToAddress(m[1]), new(big.Int).SetBytes(common.FromHex(m[2]))
+			if f.balances[a] == nil {
+				f.balances[a] = new(big.Int)
+			}
+			f.balances[a].Add(f.balances[a], amount)
+		}
+		return "0xhash", ""
 	case "tempo_fundAddress":
 		var addr string
 		_ = json.Unmarshal(p[0], &addr)
@@ -224,6 +245,37 @@ func TestTempoRemoteRefusesStuckSenders(t *testing.T) {
 	}
 	if len(chain.funded) != 0 {
 		t.Error("funded senders for a run that must not start")
+	}
+}
+
+// TestTempoRemoteFundsFromIndex0: short senders are topped up from account 0,
+// many per transaction, and an account 0 that cannot cover them is reported
+// before anything is sent.
+func TestTempoRemoteFundsFromIndex0(t *testing.T) {
+	chain := newFakeTempo()
+	srv := chain.serve(t)
+	spec := tempoRemoteSpec(srv.URL)
+	spec.NumAccounts = 40 // two funding transactions
+	spec.TempoFundFromIndex0 = true
+	root := remoteSender(t, 0)
+	chain.balances[root] = big.NewInt(10)
+
+	err := (tempoRuntime{}).Bootstrap(context.Background(), spec, []messages.NodeTarget{{GlobalSeq: 0}})
+	if err == nil || !strings.Contains(err.Error(), root.Hex()) || len(chain.sent) != 0 {
+		t.Fatalf("err = %v with %d sent, want account 0 reported as short before sending", err, len(chain.sent))
+	}
+
+	chain.balances[root] = big.NewInt(1_000_000_000_000)
+	if err := (tempoRuntime{}).Bootstrap(context.Background(), spec, []messages.NodeTarget{{GlobalSeq: 0}}); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	if len(chain.sent) != 2 {
+		t.Errorf("sent %d funding transactions, want 2 (32 transfers each at most)", len(chain.sent))
+	}
+	for i := 1; i <= spec.NumAccounts; i++ {
+		if b := chain.balances[remoteSender(t, i)]; b == nil || b.Cmp(tempoFeeReserve(spec)) < 0 {
+			t.Fatalf("sender %d holds %v, want at least the reserve", i, b)
+		}
 	}
 }
 

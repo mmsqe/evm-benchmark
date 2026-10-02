@@ -197,8 +197,9 @@ scripts/run-benchmark.sh --mode tempo-remote run   # examples/config.tempo.moder
 - Sign with your own mnemonic; the devnet one is refused, since its accounts are
   public. It still lands in `data_dir/config.json` and Temporal history, so use
   a throwaway.
-- `tempo_faucet: true` funds senders that cannot cover the run's worst-case
-  fees via `tempo_fundAddress`.
+- Senders short of the run's worst-case fees are topped up from the mnemonic's
+  account 0 with `tempo_fund_from_index0: true`, 32 per transaction, or from
+  a testnet faucet with `tempo_faucet: true`.
 - Nonces are read from the chain, so accounts can be reused, and each account
   is sent in nonce order by one worker, so `broadcast_concurrency` above
   `num_accounts` adds nothing.
