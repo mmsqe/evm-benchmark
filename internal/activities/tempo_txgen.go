@@ -21,15 +21,6 @@ import (
 // but never sends.
 const hotRecipientIndex = 0
 
-// tempoGenesisTokens are the four TIP-20s tempo-xtask mints to every derived
-// account at genesis; the `multitoken` shape round-robins them.
-var tempoGenesisTokens = []common.Address{
-	common.HexToAddress("0x20c0000000000000000000000000000000000000"),
-	common.HexToAddress("0x20c0000000000000000000000000000000000001"),
-	common.HexToAddress("0x20c0000000000000000000000000000000000002"),
-	common.HexToAddress("0x20c0000000000000000000000000000000000003"),
-}
-
 // tempoMemo is the fixed 32-byte memo for the `memo` shape; its content is
 // irrelevant (31 zero bytes then 0x01).
 var tempoMemo = func() [32]byte {
@@ -80,18 +71,14 @@ func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, ta
 	if batchCalls <= 0 {
 		batchCalls = 4
 	}
-	if shape == "batch" && batchCalls < 1 {
-		return nil, fmt.Errorf("tempo_batch_calls must be >= 1 (got %d)", batchCalls)
-	}
 	lanes := tempoNonceLanes(spec)
 
-	token := common.HexToAddress(tempoDefaultFeeToken)
+	// Gas is always paid in the genesis fee token: a custom transfer target is
+	// not necessarily a valid or funded fee token.
+	token := tempotx.FeeToken
 	if spec.ERC20ContractAddress != "" {
 		token = common.HexToAddress(spec.ERC20ContractAddress)
 	}
-	// Gas is always paid in the genesis fee token: a custom transfer target is
-	// not necessarily a valid or funded fee token.
-	feeToken := common.HexToAddress(tempoDefaultFeeToken)
 
 	// The hot shape's shared recipient, resolved once.
 	var hotRecipient common.Address
@@ -149,7 +136,7 @@ func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, ta
 				GasLimit:             spec.ERC20TransferGas,
 				NonceKey:             uint64(spec.TempoNonceKey) + uint64(lane),
 				Nonce:                laneNonce[lane],
-				FeeToken:             feeToken,
+				FeeToken:             tempotx.FeeToken,
 				Calls:                buildTempoCalls(shape, i, token, r, batchCalls),
 			}
 			raw, err := tx.SignedRaw(key)
@@ -219,8 +206,8 @@ feed:
 // swaps against the shared book — every account trading the same ALPHA/PATH pair
 // contends on its storage. Walls are large enough not to deplete over a run.
 var (
-	tempoDexBase  = common.HexToAddress("0x20c0000000000000000000000000000000000001") // ALPHA
-	tempoDexQuote = common.HexToAddress("0x20c0000000000000000000000000000000000000") // PATH (fee token)
+	tempoDexBase  = tempotx.GenesisTokens[1] // ALPHA
+	tempoDexQuote = tempotx.FeeToken         // PATH
 )
 
 const (
@@ -256,8 +243,8 @@ func buildTempoCalls(shape string, txIndex int, token, recipient common.Address,
 		return []tempotx.Call{{To: recipient}}
 	case "multitoken":
 		// One transfer per genesis token: disjoint storage trees, identical gas.
-		calls := make([]tempotx.Call, len(tempoGenesisTokens))
-		for i, tok := range tempoGenesisTokens {
+		calls := make([]tempotx.Call, len(tempotx.GenesisTokens))
+		for i, tok := range tempotx.GenesisTokens {
 			calls[i] = tempotx.Call{To: tok, Data: tempotx.Transfer(recipient, 1)}
 		}
 		return calls

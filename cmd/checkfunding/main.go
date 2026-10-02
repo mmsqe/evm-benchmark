@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mmsqe/evm-benchmark/internal/bench"
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
+	"github.com/mmsqe/evm-benchmark/internal/tempotx"
 )
 
 // ERC-20 selectors.
@@ -43,7 +44,7 @@ func main() {
 	chainID := flag.Int64("chain-id", 1337, "EVM chain id used to sign the probe tx")
 	mnemonic := flag.String("mnemonic", "test test test test test test test test test test test junk",
 		"base mnemonic the benchmark signs with")
-	feeToken := flag.String("fee-token", "0x20c0000000000000000000000000000000000000",
+	feeToken := flag.String("fee-token", tempotx.FeeToken.Hex(),
 		"fee/gas token to check balanceOf against; empty to skip")
 	probe := flag.Bool("probe", true, "send one transaction and wait for its receipt")
 	probeGas := flag.Uint64("probe-gas", 400000, "gas limit for probe transactions (Tempo's intrinsic floor is ~271k)")

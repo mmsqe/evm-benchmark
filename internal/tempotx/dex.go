@@ -2,6 +2,7 @@ package tempotx
 
 import (
 	"encoding/binary"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -44,13 +45,13 @@ func padInt(v int64) []byte {
 // resting order at `tick` that flips to `flipTick` when filled — the order-book
 // liquidity primitive tempo's own bench uses to build bid/ask walls.
 func PlaceFlip(token common.Address, amount uint64, isBid bool, tick, flipTick int16) []byte {
-	return concat(selPlaceFlip, padAddr(token), padUint(amount), padBool(isBid),
+	return slices.Concat(selPlaceFlip, padAddr(token), padUint(amount), padBool(isBid),
 		padInt(int64(tick)), padInt(int64(flipTick)))
 }
 
 // SwapExactAmountIn builds swapExactAmountIn(tokenIn, tokenOut, amountIn,
 // minAmountOut) calldata, matched against resting orders.
 func SwapExactAmountIn(tokenIn, tokenOut common.Address, amountIn, minAmountOut uint64) []byte {
-	return concat(selSwapExactAmountIn, padAddr(tokenIn), padAddr(tokenOut),
+	return slices.Concat(selSwapExactAmountIn, padAddr(tokenIn), padAddr(tokenOut),
 		padUint(amountIn), padUint(minAmountOut))
 }

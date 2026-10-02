@@ -1,10 +1,10 @@
 # Tempo (commonware consensus) benchmark, local runner.
 #
-# Prerequisites: the `tempo` and `tempo-xtask` binaries only (see plan.md). The
-# devnet is generated in-process via `tempo-xtask generate-localnet`, and native
-# 0x76 transactions are signed in-process too. Unlike the cosmos profiles there
-# is no `chain_config` / chains.jsonnet entry: Tempo networks are described by
-# the `tempo_*` fields.
+# Prerequisites: the `tempo` and `tempo-xtask` binaries only. The devnet is
+# generated in-process via `tempo-xtask generate-localnet`, and native 0x76
+# transactions are signed in-process too. Unlike the cosmos profiles there is no
+# `chain_config` / chains.jsonnet entry: Tempo networks are described by the
+# `tempo_*` fields.
 #
 # Preflight before trusting any number:
 #   go run ./cmd/checkfunding -rpc http://127.0.0.1:8004 -chain-id 1337
@@ -37,11 +37,10 @@ benchmark:
   # deliberately and report it alongside any result.
   tempo_gas_limit: 3000000000
 
-  # Extra flags appended to every `tempo node` launcher. Raising
-  # target-block-time LOWERS tx/s (~3,226 at 2s vs ~12,500 default): blocks cap
-  # near ~5,000 txs regardless, so longer blocks just mean fewer per second. If
-  # you raise it, also raise wait-for-proposal / wait-for-notarizations above it,
-  # or the validator times out its own view and consensus stalls at height 0.
+  # Extra flags appended to every `tempo node` launcher, last, so they override
+  # the defaults. If you raise target-block-time, raise wait-for-proposal and
+  # wait-for-notarizations above it, or the validator times out its own view
+  # and consensus stalls at height 0.
   # tempo_node_args:
   #   - --consensus.target-block-time
   #   - 2s
@@ -62,27 +61,16 @@ benchmark:
   # so give it headroom over the base fee rather than relying on regeneration.
   # tempo_legacy_txs: false
   tempo_max_priority_fee_per_gas: 1000000000
-  # One nonce lane per account keeps ordering comparable with legacy txs; raise
-  # it only as an explicitly reported axis (see plan.md).
+  # Key 0 is the account's own nonce; user keys cost 22,100 gas on a key's
+  # first transaction and 5,000 after. Report it with any number.
   tempo_nonce_key: 0
   # Spread each account's txs across this many nonce lanes (nonce_key = base +
   # lane). 1 = sequential. With num_accounts: 1 and tempo_tx_shape: approve, a
   # high lane count makes one owner issue parallel-eligible approves that all
   # write the same allowance slot — the conflict workload.
   # tempo_nonce_lanes: 8
-  # Workload shape (state which one a number came from):
-  #   self/hot   - uncontended / one shared recipient's balance slot
-  #   noop       - the execution floor
-  #   batch      - N transfers per tx (report calls/s too)
-  #   fresh      - transfer to a new address (state creation, ~2x gas)
-  #   multitoken - spread across the four genesis tokens
-  #   approve    - allowance write: the only shape on the exact-checked path
-  #                that can conflict under optimistic parallel execution
-  #   memo       - transferWithMemo (payment-lane variant, extra calldata)
-  #   approve_transfer - approve + transferFrom in one tx (allowance consume)
-  #   swap       - order-book DEX: each account seeds a bid/ask wall then swaps
-  #                ALPHA/PATH against the shared book (needs erc20_transfer_gas
-  #                >= 8000000; walls reach ~3.3M gas)
+  # Workload shape; see "Transaction shape" in the README for the list and each
+  # one's gas floor. State which one a number came from.
   tempo_tx_shape: self
   # tempo_batch_calls: 4   # only used by tempo_tx_shape: batch
 
@@ -91,9 +79,8 @@ benchmark:
   # 0x20c0…0000; no contract deployment is required.
   tx_type: erc20-transfer
   erc20_contract_address: "0x20c0000000000000000000000000000000000000"
-  # Must exceed the per-shape gas floor or every tx is rejected up front:
-  # ~272k (self/hot/noop/memo), ~320k (multitoken/approve_transfer),
-  # ~550k (fresh/approve).
+  # Must cover the shape's gas floor (README table) or every tx is rejected up
+  # front.
   erc20_transfer_gas: 300000
   # Signed as max_fee_per_gas for native txs; base fee rose to ~8 gwei under
   # load in earlier runs, so keep meaningful headroom.

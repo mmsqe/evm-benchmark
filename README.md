@@ -90,7 +90,7 @@ Results are written to `benchmark.out_dir` in `examples/config.yaml`.
 ## Tempo Mode
 
 Benchmarks a [Tempo](https://github.com/tempoxyz/tempo) devnet (commonware
-consensus) with the same generator and stats used for the cosmos chains, so
+consensus) with the same sender and stats used for the cosmos chains, so
 results are comparable.
 
 ### Prerequisites
@@ -134,10 +134,20 @@ run measured rejection, not throughput; `tps_summary` carries the rate. See
 
 By default the load is Tempo's **native `0x76`** envelope, signed in-process by
 the Go encoder in `internal/tempotx` (byte-verified against Tempo's canonical
-encoding). `tempo_tx_shape` selects the workload (`self`, `hot`, `noop`,
-`batch`, `fresh`, `multitoken`, `approve`, `memo`, `approve_transfer`) — see the
-`plan.md` shapes table for what each touches and its gas floor. Heavier shapes
-need a higher `erc20_transfer_gas`, which is enforced up front.
+encoding). `tempo_tx_shape` selects the workload; `erc20_transfer_gas` must
+cover the shape's floor, which is enforced up front:
+
+| shape | what it touches | gas floor |
+|---|---|---|
+| `self` (default), `hot` | one transfer; `hot` has every sender write one recipient | 272k |
+| `noop` | an empty call: the execution floor | 272k |
+| `memo` | `transferWithMemo`, 32 extra bytes of calldata | 300k |
+| `batch` | `tempo_batch_calls` transfers in one transaction (4 by default) | 300k |
+| `multitoken` | one transfer on each of the four genesis tokens | 320k |
+| `approve_transfer` | approve, then `transferFrom` of the allowance | 320k |
+| `fresh` | transfer to a new address each time (state creation) | 550k |
+| `approve` | an allowance write, the one shape that can conflict under parallel execution | 550k |
+| `swap` | order-book DEX: seed bid/ask walls, then swap against the shared book | 8M |
 
 Set `tempo_legacy_txs: true` to fall back to legacy/London EVM transactions
 (Tempo's compatibility path) — but only for a single validator: the legacy
@@ -170,8 +180,9 @@ Constraints, all enforced with clear errors:
   runs on the host (tx signing is in-process).
 
 Each node draws a disjoint slice of the funded account branch, so genesis funds
-`validators * num_accounts + 1` accounts (index 0 is the validator key). Note that this measures the tempo build inside the
-image, which is usually not the binary you built locally.
+`validators * num_accounts + 1` accounts (index 0 is the validator key). Note
+that this measures the tempo build inside the image, which is usually not the
+binary you built locally.
 
 ### Public testnet (Moderato)
 
@@ -234,8 +245,6 @@ go test ./internal/activities -run Tempo
 The devnet-bootstrapping test skips unless those two are set; the rest of the
 suite (including the byte-for-byte encoder check in `internal/tempotx`) runs
 unconditionally.
-
-See `plan.md` for measured Tempo characteristics and results.
 
 ## Allegro Mode
 

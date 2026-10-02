@@ -10,7 +10,6 @@ package tempotx
 
 import (
 	"crypto/ecdsa"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 
@@ -92,41 +91,25 @@ func Hash(raw string) string {
 func (t *Tx) fields(sig []byte) []interface{} {
 	calls := make([]interface{}, len(t.Calls))
 	for i, c := range t.Calls {
-		calls[i] = []interface{}{c.To.Bytes(), uintToRLP(c.Value), c.Data}
+		calls[i] = []interface{}{c.To.Bytes(), c.Value, c.Data}
 	}
 	fields := []interface{}{
-		uintToRLP(t.ChainID),              // 0: chainId
-		uintToRLP(t.MaxPriorityFeePerGas), // 1: maxPriorityFeePerGas
-		uintToRLP(t.MaxFeePerGas),         // 2: maxFeePerGas
-		uintToRLP(t.GasLimit),             // 3: gas
-		calls,                             // 4: calls [[to, value, data], ...]
-		[]interface{}{},                   // 5: accessList (empty)
-		uintToRLP(t.NonceKey),             // 6: nonceKey
-		uintToRLP(t.Nonce),                // 7: nonce
-		[]byte{},                          // 8: validBefore (0)
-		[]byte{},                          // 9: validAfter (0)
-		t.FeeToken.Bytes(),                // 10: feeToken (20 bytes)
-		[]byte{},                          // 11: feePayerSignatureOrSender (none)
-		[]interface{}{},                   // 12: authorizationList (empty)
+		t.ChainID,              // 0: chainId
+		t.MaxPriorityFeePerGas, // 1: maxPriorityFeePerGas
+		t.MaxFeePerGas,         // 2: maxFeePerGas
+		t.GasLimit,             // 3: gas
+		calls,                  // 4: calls [[to, value, data], ...]
+		[]interface{}{},        // 5: accessList (empty)
+		t.NonceKey,             // 6: nonceKey
+		t.Nonce,                // 7: nonce
+		uint64(0),              // 8: validBefore
+		uint64(0),              // 9: validAfter
+		t.FeeToken.Bytes(),     // 10: feeToken (20 bytes)
+		[]byte{},               // 11: feePayerSignatureOrSender (none)
+		[]interface{}{},        // 12: authorizationList (empty)
 	}
 	if sig != nil {
 		fields = append(fields, sig) // 13: sender signature envelope (65 bytes)
 	}
 	return fields
-}
-
-// uintToRLP renders an unsigned integer as minimal big-endian bytes — empty for
-// zero — the canonical RLP integer form.
-func uintToRLP(v uint64) []byte {
-	if v == 0 {
-		return []byte{}
-	}
-	var b [8]byte
-	binary.BigEndian.PutUint64(b[:], v)
-	for i := 0; i < len(b); i++ {
-		if b[i] != 0 {
-			return b[i:]
-		}
-	}
-	return []byte{}
 }

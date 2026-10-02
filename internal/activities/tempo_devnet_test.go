@@ -22,8 +22,7 @@ var (
 // (an exec'd command, one single-quoted arg per continued line, trailing
 // newline, no `set -eu`) must match what `tempo node` was verified to accept.
 func TestTempoRunScriptLocalFormat(t *testing.T) {
-	args := tempoNodeArgs(messages.BenchmarkSpec{}, 8006, "127.0.0.1", "127.0.0.1", "0.0.0.0",
-		tempoLocalTrustedPeers(twoLocalVals, fixedIdentities), false, nil)
+	args := tempoNodeArgs(messages.BenchmarkSpec{}, 8006, "127.0.0.1", tempoLocalTrustedPeers(twoLocalVals, fixedIdentities), false)
 	got := tempoRunScript("/opt/tempo", args, false).render()
 
 	want := `#!/bin/sh
@@ -91,8 +90,7 @@ exec '/opt/tempo' \
 // `set -eu`, binds every service to 0.0.0.0 on the fixed 8000 block, advertises
 // the OTHER validators by service name, and ends with the bootnodes override.
 func TestTempoRunScriptDockerFormat(t *testing.T) {
-	args := tempoNodeArgs(messages.BenchmarkSpec{}, tempoDockerConsensusPort, "0.0.0.0", "0.0.0.0", "0.0.0.0",
-		tempoDockerTrustedPeers(twoLocalVals, fixedIdentities, 0), true, nil)
+	args := tempoNodeArgs(messages.BenchmarkSpec{}, tempoDockerConsensusPort, "0.0.0.0", tempoDockerTrustedPeers(twoLocalVals, fixedIdentities, 0), true)
 	got := tempoRunScript("tempo", args, true).render()
 
 	want := `#!/bin/sh
@@ -166,15 +164,16 @@ exec 'tempo' \
 // --consensus.target-block-time to probe the ~5,000-tx cap.
 func TestTempoNodeArgsAppendsExtra(t *testing.T) {
 	extra := []string{"--consensus.target-block-time", "2s"}
+	spec := messages.BenchmarkSpec{TempoNodeArgs: extra}
 
-	local := tempoNodeArgs(messages.BenchmarkSpec{}, 8000, "127.0.0.1", "127.0.0.1", "0.0.0.0", nil, false, extra)
+	local := tempoNodeArgs(spec, 8000, "127.0.0.1", nil, false)
 	if n := len(local); local[n-2] != extra[0] || local[n-1] != extra[1] {
 		t.Errorf("extra args not appended last (local): %v", local[len(local)-3:])
 	}
 
 	// Docker: extra flags stay last, after the bootnodes override and the
 	// derived pool sizing, so an operator can override any of them.
-	docker := tempoNodeArgs(messages.BenchmarkSpec{}, 8000, "0.0.0.0", "0.0.0.0", "0.0.0.0", nil, true, extra)
+	docker := tempoNodeArgs(spec, 8000, "0.0.0.0", nil, true)
 	if n := len(docker); docker[n-2] != extra[0] || docker[n-1] != extra[1] {
 		t.Errorf("extra args not last: %v", docker[len(docker)-4:])
 	}

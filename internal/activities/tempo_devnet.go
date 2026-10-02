@@ -168,17 +168,13 @@ func generateTempoDevnet(ctx context.Context, spec messages.BenchmarkSpec, nodes
 		if docker {
 			// Compose invokes docker-run.sh by its in-container path, so it
 			// cannot share run.sh's name with the local launcher.
-			nodeArgs := tempoNodeArgs(spec, tempoDockerConsensusPort,
-				"0.0.0.0", "0.0.0.0", "0.0.0.0",
-				tempoDockerTrustedPeers(vals, identities, i), true, spec.TempoNodeArgs)
+			nodeArgs := tempoNodeArgs(spec, tempoDockerConsensusPort, "0.0.0.0", tempoDockerTrustedPeers(vals, identities, i), true)
 			script := tempoRunScript(tempoBin, nodeArgs, true).render()
 			if err := writeExecutable(filepath.Join(nodeDir, "docker-run.sh"), script); err != nil {
 				return err
 			}
 		} else {
-			nodeArgs := tempoNodeArgs(spec, v.Port,
-				v.Host, v.Host, "0.0.0.0",
-				tempoLocalTrustedPeers(vals, identities), false, spec.TempoNodeArgs)
+			nodeArgs := tempoNodeArgs(spec, v.Port, v.Host, tempoLocalTrustedPeers(vals, identities), false)
 			if err := tempoRunScript(tempoBin, nodeArgs, false).write(nodeDir); err != nil {
 				return err
 			}
@@ -196,34 +192,28 @@ func generateTempoDevnet(ctx context.Context, spec messages.BenchmarkSpec, nodes
 // tempoXtaskGenesisArgs builds the `tempo-xtask generate-localnet` genesis args
 // for the fields the benchmark sets; the rest keep tempo-xtask's own defaults.
 func tempoXtaskGenesisArgs(spec messages.BenchmarkSpec, validatorsArg string) []string {
-	epoch := spec.TempoEpochLength
-	if epoch <= 0 {
-		epoch = tempoDefaultEpochLength
-	}
-	gasLimit := spec.TempoGasLimit
-	if gasLimit <= 0 {
-		gasLimit = tempoDefaultGasLimit
-	}
 	return []string{
 		"--chain-id", strconv.FormatInt(spec.EVMChainID, 10),
 		"--accounts", strconv.Itoa(tempoFundedAccounts(spec)),
-		"--epoch-length", strconv.Itoa(epoch),
-		"--gas-limit", strconv.FormatInt(gasLimit, 10),
+		"--epoch-length", strconv.Itoa(cmp.Or(spec.TempoEpochLength, tempoDefaultEpochLength)),
+		"--gas-limit", strconv.FormatInt(cmp.Or(spec.TempoGasLimit, tempoDefaultGasLimit), 10),
 		"--mnemonic", spec.BaseMnemonic,
 		"--validators", validatorsArg,
 	}
 }
 
 // tempoNodeArgs builds the `tempo node` argument list (everything after the
-// binary). All paths are node-dir-relative; the launcher cd's there first.
-func tempoNodeArgs(spec messages.BenchmarkSpec, base int, listenAddr, metricsAddr, rpcAddr string, trustedPeers []string, dockerBootnodes bool, extraArgs []string) []string {
+// binary) for a node whose port block starts at base: consensus and metrics
+// bind to bindAddr, JSON-RPC to every interface. All paths are node-dir-
+// relative; the launcher cd's there first.
+func tempoNodeArgs(spec messages.BenchmarkSpec, base int, bindAddr string, trustedPeers []string, docker bool) []string {
 	args := []string{
 		"node",
 		"--consensus.signing-key", "./signing.key",
 		"--consensus.secret", "./.secret",
 		"--consensus.signing-share", "./signing.share",
-		"--consensus.listen-address", fmt.Sprintf("%s:%d", listenAddr, base),
-		"--consensus.metrics-address", fmt.Sprintf("%s:%d", metricsAddr, base+2),
+		"--consensus.listen-address", fmt.Sprintf("%s:%d", bindAddr, base),
+		"--consensus.metrics-address", fmt.Sprintf("%s:%d", bindAddr, base+2),
 		"--chain", "./genesis.json",
 		"--datadir", ".",
 		"--port", strconv.Itoa(base + 1),
@@ -232,21 +222,21 @@ func tempoNodeArgs(spec messages.BenchmarkSpec, base int, listenAddr, metricsAdd
 		"--trusted-peers", strings.Join(trustedPeers, ","),
 		"--authrpc.port", strconv.Itoa(base + 3),
 		"--http",
-		"--http.addr", rpcAddr,
+		"--http.addr", "0.0.0.0",
 		"--http.port", strconv.Itoa(base + 4),
 		"--http.api", "all",
 		"--ws",
-		"--ws.addr", rpcAddr,
+		"--ws.addr", "0.0.0.0",
 		"--ws.port", strconv.Itoa(base + 5),
 		"--consensus.use-local-defaults",
 		"--consensus.allow-private-ips",
 	}
-	if dockerBootnodes {
+	if docker {
 		args = append(args, "--tempo.bootnodes-endpoint", "none")
 	}
 	args = append(args, rethTxPoolArgs(spec)...)
 	// Extra flags last, so an operator can override any default above.
-	return append(args, extraArgs...)
+	return append(args, spec.TempoNodeArgs...)
 }
 
 // tempoLocalTrustedPeers advertises every validator (self included) at its host

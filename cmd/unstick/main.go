@@ -43,8 +43,6 @@ const (
 	giveUpAfter = 2 * time.Minute
 )
 
-var feeToken = common.HexToAddress("0x20c0000000000000000000000000000000000000")
-
 func main() {
 	configPath := flag.String("config", "", "benchmark config with remote_rpc_url")
 	gasPriceGwei := flag.Float64("gas-price", 2, "replacement fee in gwei; must beat the stuck transactions' by 10%")
@@ -212,7 +210,7 @@ func (s *sender) replacement(signer types.Signer, nonce uint64) (string, error) 
 		GasTipCap: s.price,
 		GasFeeCap: s.price,
 		Gas:       replacementGas,
-		To:        &feeToken,
+		To:        &tempotx.FeeToken,
 		Data:      tempotx.Transfer(s.addr, 1),
 	}), signer, s.key)
 	if err != nil {

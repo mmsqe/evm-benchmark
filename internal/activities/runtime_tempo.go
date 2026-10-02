@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/mmsqe/evm-benchmark/internal/bench"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
+	"github.com/mmsqe/evm-benchmark/internal/tempotx"
 )
 
 // Port offsets within a Tempo node's port block (0=consensus-p2p,
@@ -25,10 +26,6 @@ const (
 	// avoid colliding with the cosmos defaults.
 	defaultTempoBasePort = 8000
 
-	// tempoDefaultFeeToken is the TIP-20 fee token present in every Tempo
-	// genesis, usable as an ERC-20 transfer target without deploying anything.
-	tempoDefaultFeeToken = "0x20c0000000000000000000000000000000000000"
-
 	// tempoMinTxGas is Tempo's intrinsic gas floor (~21k + ~250k); anything
 	// below is rejected with "call gas cost exceeds the gas limit".
 	tempoMinTxGas = 272000
@@ -37,6 +34,10 @@ const (
 	// of a user nonce key (key != 0); later ones pay 5,000, key 0 nothing.
 	tempoNewNonceKeyGas = 22100
 )
+
+// tempoDefaultFeeToken is the transfer target when the config names none: the
+// fee token is a TIP-20 every genesis deploys, so nothing has to be deployed.
+var tempoDefaultFeeToken = tempotx.FeeToken.Hex()
 
 // tempoPorts is Tempo's per-node port allocation.
 var tempoPorts = portBlock{

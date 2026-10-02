@@ -109,7 +109,7 @@ func interiorBuckets(buckets []tpsBucket) []tpsBucket {
 }
 
 // medianTPS is the middle second of the active window — a better summary than
-// the peak, which plan.md notes falls off steeply.
+// the peak, which falls off steeply after the first seconds.
 func medianTPS(buckets []tpsBucket) float64 {
 	if len(buckets) == 0 {
 		return 0
