@@ -47,15 +47,14 @@ benchmark:
   tempo_gas_limit: 3000000000
 
   # Extra flags appended to every `tempo node` launcher (see config.tempo.yaml).
-  # Append to raise the per-block build budget. wait-for-proposal /
-  # wait-for-notarizations must go above target-block-time or consensus stalls
-  # at height 0 — doubly important here with real multi-validator BFT.
+  # Append to raise the per-block build budget, ordering the timeouts as
+  # config.tempo.yaml says — doubly important here with real multi-validator BFT.
   #   - --consensus.target-block-time
   #   - 2s
   #   - --consensus.wait-for-proposal
   #   - 4s
   #   - --consensus.wait-for-notarizations
-  #   - 4s
+  #   - 5s
 
   evm_chain_id: 1337
   base_mnemonic: "test test test test test test test test test test test junk"

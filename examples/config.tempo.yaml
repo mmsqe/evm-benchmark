@@ -38,16 +38,16 @@ benchmark:
   tempo_gas_limit: 3000000000
 
   # Extra flags appended to every `tempo node` launcher, last, so they override
-  # the defaults. If you raise target-block-time, raise wait-for-proposal and
-  # wait-for-notarizations above it, or the validator times out its own view
-  # and consensus stalls at height 0.
+  # the defaults. If you raise target-block-time, raise wait-for-proposal above
+  # it and wait-for-notarizations above that, or the validator times out its
+  # own view and consensus stalls at height 0, or tempo refuses to start.
   # tempo_node_args:
   #   - --consensus.target-block-time
   #   - 2s
   #   - --consensus.wait-for-proposal
   #   - 4s
   #   - --consensus.wait-for-notarizations
-  #   - 4s
+  #   - 5s
 
   evm_chain_id: 1337
   # Must match the devnet mnemonic: the benchmark signs from
