@@ -450,7 +450,6 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 		return messages.NodeRunResult{}, fmt.Errorf("load node txs: %w", err)
 	}
 
-	var proc *exec.Cmd
 	containerName := ""
 	dockerImage := strings.TrimSpace(spec.DockerImage)
 	if strings.TrimSpace(req.DockerImageOverride) != "" {
@@ -562,23 +561,34 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 			if dir != "" {
 				logHome = dir
 			}
-			proc = exec.CommandContext(ctx, argv[0], argv[1:]...)
-			proc.Dir = dir
-			logFile, err := os.OpenFile(filepath.Join(logHome, "node.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+			logPath := filepath.Join(logHome, "node.log")
+			logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 			if err != nil {
 				return messages.NodeRunResult{}, fmt.Errorf("open node log file: %w", err)
 			}
 			defer logFile.Close()
+			var stopRun context.CancelCauseFunc
+			ctx, stopRun = context.WithCancelCause(ctx)
+			defer stopRun(nil)
+			proc := exec.CommandContext(ctx, argv[0], argv[1:]...)
+			proc.Dir = dir
 			proc.Stdout = logFile
 			proc.Stderr = logFile
+			// SIGTERM first so the node can flush; killed if still up after WaitDelay.
+			proc.Cancel = func() error { return proc.Process.Signal(syscall.SIGTERM) }
+			proc.WaitDelay = 5 * time.Second
 			if err := proc.Start(); err != nil {
 				return messages.NodeRunResult{}, fmt.Errorf("start node process: %w", err)
 			}
-			defer func() {
-				if proc.Process != nil {
-					_ = terminateProcessGracefully(proc, 5*time.Second)
-				}
+			// The node exiting ends the run, with the end of its log as the cause.
+			exited := make(chan struct{})
+			go func() {
+				err := proc.Wait()
+				tail, _ := os.ReadFile(logPath)
+				stopRun(fmt.Errorf("node process exited (%v); end of %s:\n%s", err, logPath, tail[max(0, len(tail)-2048):]))
+				close(exited)
 			}()
+			defer func() { stopRun(nil); <-exited }()
 		}
 	}
 
@@ -630,7 +640,11 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 	}
 
 	spec.BroadcastConcurrency = broadcastConcurrency
-	return doRun(ctx, client, spec, target, rpcURL, txs)
+	res, err := doRun(ctx, client, spec, target, rpcURL, txs)
+	if err != nil && ctx.Err() != nil && context.Cause(ctx) != ctx.Err() {
+		err = fmt.Errorf("%w: %w", err, context.Cause(ctx))
+	}
+	return res, err
 }
 
 func doRun(
@@ -993,36 +1007,6 @@ func hasStartArgPrefix(startArgs []string, prefix string) bool {
 		}
 	}
 	return false
-}
-
-func terminateProcessGracefully(cmd *exec.Cmd, timeout time.Duration) error {
-	if cmd == nil || cmd.Process == nil {
-		return nil
-	}
-
-	// Allow profilers and other shutdown hooks to flush by terminating first.
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		if _, killErr := cmd.Process.Wait(); killErr == nil {
-			return nil
-		}
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-		return err
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		_, waitErr := cmd.Process.Wait()
-		done <- waitErr
-	}()
-
-	select {
-	case waitErr := <-done:
-		return waitErr
-	case <-time.After(timeout):
-		_ = cmd.Process.Kill()
-		return <-done
-	}
 }
 
 func dumpDockerLogs(spec messages.BenchmarkSpec, target messages.NodeTarget, containerName, reason string) (string, error) {

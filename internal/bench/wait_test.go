@@ -98,6 +98,26 @@ func TestWaitForTxsGivesUpOnDroppedTxs(t *testing.T) {
 	}
 }
 
+// TestDetectIdleOrHaltGivesUpOnDeadNode: a node that never answers ends the wait after haltAfter.
+func TestDetectIdleOrHaltGivesUpOnDeadNode(t *testing.T) {
+	srv := fakeRPC(t, (&sharedChain{}).handle)
+	url, client := srv.URL, srv.Client()
+	srv.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- DetectIdleOrHalt(context.Background(), client, url, 40, time.Millisecond, 50*time.Millisecond)
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "unreachable") {
+			t.Fatalf("DetectIdleOrHalt = %v, want an unreachable-node error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DetectIdleOrHalt kept polling a node that never answers")
+	}
+}
+
 // TestDumpBlockStatsCountsOnlyOwn: on a shared chain the other users'
 // transactions in the same blocks must not be reported as this run's.
 func TestDumpBlockStatsCountsOnlyOwn(t *testing.T) {

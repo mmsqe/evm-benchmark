@@ -57,6 +57,10 @@ func DetectIdleOrHalt(ctx context.Context, client *http.Client, rpcURL string, i
 	for {
 		h, err := CurrentHeight(ctx, client, rpcURL)
 		if err != nil {
+			// Unlike a halted chain, a dead node's blocks can no longer be read.
+			if time.Since(lastProgressAt) >= haltAfter {
+				return fmt.Errorf("node unreachable for %s after height %d: %w", haltAfter, lastHeight, err)
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
