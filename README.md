@@ -20,7 +20,31 @@ Temporal-based stateless EVM load testing in Go.
 - `internal/activities/stateless.go`: concrete activity implementations.
 - `internal/bench`: EVM tx generation, JSON-RPC send, idle/halt detection, TPS stats.
 - `config/chains.jsonnet`: local chain profiles used by `benchmark.chain_config`.
-- `examples/config.yaml`: runnable config sample.
+- `examples/`: runnable configs; see [Configs](#configs).
+
+## Configs
+
+Configs are [jsonnet](https://jsonnet.org). `examples/base.libsonnet` holds what
+every example shares, and each example imports it, or the example it varies,
+and overrides only what differs. A config of your own can do the same:
+
+```jsonnet
+// my-tempo.jsonnet, at the repo root
+local tempo = import 'examples/config.tempo.jsonnet';
+
+tempo {
+  benchmark+: {
+    tempo_bin: '/path/to/tempo/target/release/tempo',
+    num_txs: 100,
+  },
+}
+```
+
+`+:` merges into the inherited object, `:` replaces a field and `::` hides it.
+Configs are evaluated in-process. A relative path in a config, such as
+`chains_config_path`, resolves against the file passed to `-config`. Jsonnet
+numbers are doubles, so write integers above 2^53 as strings. YAML configs
+still load.
 
 ## Measuring
 
@@ -85,7 +109,7 @@ scripts/run-benchmark.sh run
 # scripts/run-benchmark.sh stop
 ```
 
-Results are written to `benchmark.out_dir` in `examples/config.yaml`.
+Results are written to `benchmark.out_dir` in `examples/config.jsonnet`.
 
 ## Tempo Mode
 
@@ -104,15 +128,15 @@ results are comparable.
 
 ### Configure
 
-`examples/config.tempo.yaml` resolves `tempo` and `tempo-xtask` from your `PATH`
+`examples/config.tempo.jsonnet` resolves `tempo` and `tempo-xtask` from your `PATH`
 by default (`which tempo`). Override only to benchmark a specific build:
 
-```yaml
-tempo_bin:       /path/to/tempo/target/release/tempo
-tempo_xtask_bin: /path/to/tempo/target/release/tempo-xtask
+```jsonnet
+tempo_bin: '/path/to/tempo/target/release/tempo',
+tempo_xtask_bin: '/path/to/tempo/target/release/tempo-xtask',
 ```
 
-The docker profile (`examples/config.tempo.docker.yaml`) uses the in-image
+The docker profile (`examples/config.tempo.docker.jsonnet`) uses the in-image
 `tempo` command name for `tempo_bin`.
 
 ### Run
@@ -191,7 +215,7 @@ generated or started, and no tempo binaries are needed:
 
 ```bash
 export TEMPO_BENCH_MNEMONIC="$(cast wallet new-mnemonic | sed -n '/^Phrase:/{n;p;}')"
-scripts/run-benchmark.sh --mode tempo-remote run   # examples/config.tempo.moderato.yaml
+scripts/run-benchmark.sh --mode tempo-remote run   # examples/config.tempo.moderato.jsonnet
 ```
 
 - Sign with your own mnemonic; the devnet one is refused, since its accounts are
@@ -277,12 +301,12 @@ load, and writes `/tmp/allegro-benchmark/output/node_0_block_stats.log` (see
 
 ### Configure
 
-`examples/config.allegro.yaml` resolves both binaries from your `PATH`. Override
+`examples/config.allegro.jsonnet` resolves both binaries from your `PATH`. Override
 only to benchmark a specific build:
 
-```yaml
-allegro_bin:       /path/to/allegro/target/release/allegro
-allegro_xtask_bin: /path/to/allegro/target/release/allegro-xtask
+```jsonnet
+allegro_bin: '/path/to/allegro/target/release/allegro',
+allegro_xtask_bin: '/path/to/allegro/target/release/allegro-xtask',
 ```
 
 Ports are allocated in blocks of 4 per node (consensus p2p, execution p2p,
@@ -362,7 +386,7 @@ saved in full as `node_N_metrics.prom`:
 Block capacity bounds the rate: one block per `reth_block_time`, which must be
 at least 1s because reth stamps each block at least a second after its parent,
 holding at most `reth_gas_limit` gas and, under Osaka (EIP-7934), about 8 MiB
-of transactions, 48,486 of these transfers. The default `config.reth.yaml`
+of transactions, 48,486 of these transfers. The default `config.reth.jsonnet`
 lifts both: one node takes a 2,000,000-transfer load with a 1e10 gas limit, a
 `genesis_patch` that leaves Osaka unscheduled (not a mainnet fork schedule),
 and eight extra transaction validation tasks, since accepting transactions is
@@ -374,7 +398,7 @@ so that is the sender's rate and a lower bound on reth's. Blocks carried 49k to
 
 ### Comparing a validation change
 
-`config.reth.validation.yaml` adds a fullnode and caps blocks at 1 Ggas, 35,391
+`config.reth.validation.jsonnet` adds a fullnode and caps blocks at 1 Ggas, 35,391
 transfers, so they are identical and full. `reth_fullnode_args` applies to
 fullnodes only, so the blocks stay the same while their validation changes,
 e.g. `["--engine.prewarm-reuse"]`. Alternate the two configs over several pairs
@@ -454,7 +478,7 @@ scripts/run-benchmark.sh --mode local run
 # scripts/run-benchmark.sh --mode local stop
 ```
 
-By default local mode uses `examples/config.local.yaml`.
+By default local mode uses `examples/config.local.jsonnet`.
 
 ### Chain Selection From jsonnet
 
@@ -467,7 +491,7 @@ export CHAIN_CONFIG=evmd
 export CHAINS_CONFIG_PATH=./config/chains.jsonnet
 ```
 
-or set `benchmark.chain_config` and `benchmark.chains_config_path` in `examples/config.yaml`.
+or set `benchmark.chain_config` and `benchmark.chains_config_path` in `examples/config.jsonnet`.
 
 When enabled, these values are sourced from jsonnet and applied automatically:
 

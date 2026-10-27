@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/go-jsonnet"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 	"gopkg.in/yaml.v3"
 )
@@ -48,9 +49,9 @@ func LoadForGenerate(path string) (AppConfig, error) {
 }
 
 func load(path string, runtimeValidation bool) (AppConfig, error) {
-	content, err := os.ReadFile(path)
+	content, err := readConfig(path)
 	if err != nil {
-		return AppConfig{}, fmt.Errorf("read config: %w", err)
+		return AppConfig{}, err
 	}
 
 	var cfg AppConfig
@@ -69,6 +70,24 @@ func load(path string, runtimeValidation bool) (AppConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// readConfig returns the config as YAML. A .jsonnet config is evaluated first;
+// the JSON it produces is YAML too, so both formats decode through the same
+// struct tags.
+func readConfig(path string) ([]byte, error) {
+	if filepath.Ext(path) != ".jsonnet" {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read config: %w", err)
+		}
+		return content, nil
+	}
+	out, err := jsonnet.MakeVM().EvaluateFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate config: %w", err)
+	}
+	return []byte(out), nil
 }
 
 // expandPath resolves a leading ~ and $VAR / ${VAR} references in a config path.

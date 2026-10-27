@@ -18,7 +18,7 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
-var configPath = flag.String("config", "./examples/config.yaml", "Path to starter config")
+var configPath = flag.String("config", "./examples/config.jsonnet", "Path to starter config")
 
 func main() {
 	flag.Parse()

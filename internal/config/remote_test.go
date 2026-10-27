@@ -11,7 +11,7 @@ import (
 // endpoint was measured to accept, and to a mnemonic that never lives in git.
 func TestModeratoExampleConfig(t *testing.T) {
 	t.Setenv("TEMPO_BENCH_MNEMONIC", "from the environment")
-	cfg, err := Load("../../examples/config.tempo.moderato.yaml")
+	cfg, err := Load("../../examples/config.tempo.moderato.jsonnet")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

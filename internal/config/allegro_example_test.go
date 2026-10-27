@@ -7,7 +7,7 @@ import (
 )
 
 func TestAllegroExampleConfigParses(t *testing.T) {
-	cfg, err := Load("../../examples/config.allegro.yaml")
+	cfg, err := Load("../../examples/config.allegro.jsonnet")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestAllegroExampleConfigParses(t *testing.T) {
 // cosmos ERC-20 default must not be applied to an allegro config, where no
 // contract exists at that address.
 func TestAllegroConfigDoesNotInheritCosmosToken(t *testing.T) {
-	cfg, err := Load("../../examples/config.allegro.yaml")
+	cfg, err := Load("../../examples/config.allegro.jsonnet")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

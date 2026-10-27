@@ -9,7 +9,7 @@ import (
 // TestRethValidationExampleConfig pins the A/B example's settings that would
 // silently change what a run measures.
 func TestRethValidationExampleConfig(t *testing.T) {
-	cfg, err := Load("../../examples/config.reth.validation.yaml")
+	cfg, err := Load("../../examples/config.reth.validation.jsonnet")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -30,13 +30,18 @@ func TestRethValidationExampleConfig(t *testing.T) {
 	if !b.ValidatorGenerateLoad {
 		t.Error("validator_generate_load must be true, or the producer takes no load")
 	}
+	// It imports config.reth.jsonnet, whose intake tuning and Osaka lift would
+	// change what the A/B runs.
+	if len(b.RethNodeArgs) != 0 || b.GenesisPatch != nil {
+		t.Errorf("reth_node_args/genesis_patch = %v/%v, want neither inherited", b.RethNodeArgs, b.GenesisPatch)
+	}
 }
 
 // TestRethExampleConfig pins what makes the default example a throughput
 // ceiling: one node taking a load long enough to measure, a gas limit no block
 // fills, and no Osaka block size cap.
 func TestRethExampleConfig(t *testing.T) {
-	cfg, err := Load("../../examples/config.reth.yaml")
+	cfg, err := Load("../../examples/config.reth.jsonnet")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

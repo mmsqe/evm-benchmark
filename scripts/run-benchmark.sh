@@ -55,7 +55,7 @@ Examples:
 
   scripts/run-benchmark.sh --mode allegro run
   scripts/run-benchmark.sh --mode reth run
-  scripts/run-benchmark.sh --mode reth --config examples/config.reth.validation.yaml run
+  scripts/run-benchmark.sh --mode reth --config examples/config.reth.validation.jsonnet run
 USAGE
 }
 
@@ -134,13 +134,13 @@ esac
 
 if [[ -z "$CONFIG" ]]; then
   case "$MODE" in
-    docker) CONFIG="./examples/config.yaml" ;;
-    tempo)  CONFIG="./examples/config.tempo.yaml" ;;
-    tempo-docker) CONFIG="./examples/config.tempo.docker.yaml" ;;
-    tempo-remote) CONFIG="./examples/config.tempo.moderato.yaml" ;;
-    allegro) CONFIG="./examples/config.allegro.yaml" ;;
-    reth)   CONFIG="./examples/config.reth.yaml" ;;
-    *)      CONFIG="./examples/config.local.yaml" ;;
+    docker) CONFIG="./examples/config.jsonnet" ;;
+    tempo)  CONFIG="./examples/config.tempo.jsonnet" ;;
+    tempo-docker) CONFIG="./examples/config.tempo.docker.jsonnet" ;;
+    tempo-remote) CONFIG="./examples/config.tempo.moderato.jsonnet" ;;
+    allegro) CONFIG="./examples/config.allegro.jsonnet" ;;
+    reth)   CONFIG="./examples/config.reth.jsonnet" ;;
+    *)      CONFIG="./examples/config.local.jsonnet" ;;
   esac
 fi
 
@@ -271,7 +271,11 @@ cleanup_benchmark_workflows() {
   fi
 
   local cfg_workflow_id=""
-  cfg_workflow_id="$(awk '/^[[:space:]]*workflow_id:[[:space:]]*/{print $2; exit}' "$CONFIG" | tr -d '"' || true)"
+  if [[ "$CONFIG" == *.jsonnet ]]; then
+    cfg_workflow_id="$(jsonnet -S -e "(import '$CONFIG').start.workflow_id" 2>/dev/null || true)"
+  else
+    cfg_workflow_id="$(awk '/^[[:space:]]*workflow_id:[[:space:]]*/{print $2; exit}' "$CONFIG" | tr -d '"' || true)"
+  fi
 
   local workflow_ids=()
   if [[ -n "$cfg_workflow_id" ]]; then

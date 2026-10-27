@@ -17,7 +17,7 @@ func TestExampleConfigsLoad(t *testing.T) {
 	}
 	found := 0
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonnet") {
 			continue
 		}
 		found++
@@ -46,7 +46,7 @@ func TestExampleConfigsLoad(t *testing.T) {
 //   - a sender that pauses at 5,000 pending measures its own refill loop;
 //   - a pool that cannot hold the load turns the run into a rejection test.
 func TestComparableExamplesShareOneProfile(t *testing.T) {
-	names := []string{"config.local.yaml", "config.tempo.yaml", "config.allegro.yaml"}
+	names := []string{"config.local.jsonnet", "config.tempo.jsonnet", "config.allegro.jsonnet"}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("CHAIN_CONFIG", "")
@@ -89,7 +89,7 @@ func TestComparableExamplesShareOneProfile(t *testing.T) {
 // transaction past account-slots.
 func TestEvmdExampleDoesNotPinPoolSizes(t *testing.T) {
 	t.Setenv("CHAIN_CONFIG", "")
-	cfg, err := Load("../../examples/config.local.yaml")
+	cfg, err := Load("../../examples/config.local.jsonnet")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

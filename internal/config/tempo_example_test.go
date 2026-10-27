@@ -8,7 +8,7 @@ import (
 )
 
 func TestTempoExampleConfigParses(t *testing.T) {
-	cfg, err := Load("../../examples/config.tempo.yaml")
+	cfg, err := Load("../../examples/config.tempo.jsonnet")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestTempoExampleConfigParses(t *testing.T) {
 }
 
 func TestTempoDockerExampleConfigParses(t *testing.T) {
-	cfg, err := Load("../../examples/config.tempo.docker.yaml")
+	cfg, err := Load("../../examples/config.tempo.docker.jsonnet")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestTempoDockerExampleConfigParses(t *testing.T) {
 // cosmos ERC-20 default must not be applied to a tempo config, or every
 // transaction would target a contract that does not exist on Tempo.
 func TestTempoConfigDoesNotInheritCosmosToken(t *testing.T) {
-	cfg, err := Load("../../examples/config.tempo.yaml")
+	cfg, err := Load("../../examples/config.tempo.jsonnet")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

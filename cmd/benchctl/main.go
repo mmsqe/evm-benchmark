@@ -81,7 +81,7 @@ func runBuildImage(args []string) {
 
 func runGen(args []string) {
 	fs := flag.NewFlagSet("gen", flag.ExitOnError)
-	configPath := fs.String("config", "./examples/config.yaml", "config path")
+	configPath := fs.String("config", "./examples/config.jsonnet", "config path")
 	dataRoot := fs.String("data-root", "", "root data dir; writes generated data to <data-root>/out")
 	clean := fs.Bool("clean", false, "remove data-root before generation")
 	fs.Parse(args)
@@ -113,7 +113,7 @@ func runGen(args []string) {
 
 func runPatchImage(args []string) {
 	fs := flag.NewFlagSet("patchimage", flag.ExitOnError)
-	configPath := fs.String("config", "./examples/config.yaml", "config path")
+	configPath := fs.String("config", "./examples/config.jsonnet", "config path")
 	fromImage := fs.String("from-image", "", "base image tag (overrides config)")
 	toImage := fs.String("to-image", "", "patched image tag (overrides config)")
 	sourceDir := fs.String("source-dir", "", "source directory to ADD as ./out (overrides config)")

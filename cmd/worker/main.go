@@ -13,7 +13,7 @@ import (
 	"go.temporal.io/sdk/worker"
 )
 
-var configPath = flag.String("config", "./examples/config.yaml", "Path to worker config")
+var configPath = flag.String("config", "./examples/config.jsonnet", "Path to worker config")
 
 func main() {
 	flag.Parse()
