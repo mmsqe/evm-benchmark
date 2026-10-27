@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -19,7 +18,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
-	"github.com/mmsqe/evm-benchmark/internal/tempotx"
 )
 
 // A valid mnemonic other than the devnets' public one; remote mode refuses that.
@@ -122,8 +120,9 @@ func (f *fakeTempo) handle(method string, params json.RawMessage) (interface{}, 
 	return nil, "unexpected " + method
 }
 
-// serve exposes the chain over JSON-RPC, single and batched.
-func (f *fakeTempo) serve(t *testing.T) *httptest.Server {
+// serve exposes the chain over JSON-RPC, single and batched, and returns a
+// remote spec aimed at it.
+func (f *fakeTempo) serve(t *testing.T) messages.BenchmarkSpec {
 	t.Helper()
 	answer := func(req map[string]json.RawMessage) map[string]interface{} {
 		var method string
@@ -154,7 +153,7 @@ func (f *fakeTempo) serve(t *testing.T) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(answer(req))
 	}))
 	t.Cleanup(srv.Close)
-	return srv
+	return tempoRemoteSpec(srv.URL)
 }
 
 func tempoRemoteSpec(url string) messages.BenchmarkSpec {
@@ -175,6 +174,11 @@ func remoteSender(t *testing.T, index int) common.Address {
 		t.Fatal(err)
 	}
 	return crypto.PubkeyToAddress(key.PublicKey)
+}
+
+// bootstrapRemote runs Bootstrap for the remote spec's single node.
+func bootstrapRemote(spec messages.BenchmarkSpec) error {
+	return (tempoRuntime{}).Bootstrap(context.Background(), spec, []messages.NodeTarget{{GlobalSeq: 0}})
 }
 
 // TestTempoRemoteRefusesPublicKeys: on a public chain the devnets' mnemonic —
@@ -206,21 +210,20 @@ func TestTempoRemoteRefusesPublicKeys(t *testing.T) {
 // accounts that cannot cover the run, so a rerun spends nothing.
 func TestTempoRemoteBootstrapFundsOnlyShortAccounts(t *testing.T) {
 	chain := newFakeTempo()
-	srv := chain.serve(t)
-	spec := tempoRemoteSpec(srv.URL)
+	spec := chain.serve(t)
 	spec.TempoFaucet = true
 	rich := remoteSender(t, 1)
 	poor := remoteSender(t, 2)
 	chain.balances[rich] = tempoFeeReserve(spec)
 	chain.balances[poor] = new(big.Int).Sub(tempoFeeReserve(spec), big.NewInt(1))
 
-	if err := (tempoRuntime{}).Bootstrap(context.Background(), spec, []messages.NodeTarget{{GlobalSeq: 0}}); err != nil {
+	if err := bootstrapRemote(spec); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 	if len(chain.funded) != 1 || chain.funded[0] != poor {
 		t.Errorf("faucet funded %v, want only %s", chain.funded, poor.Hex())
 	}
-	if err := (tempoRuntime{}).Bootstrap(context.Background(), spec, []messages.NodeTarget{{GlobalSeq: 0}}); err != nil {
+	if err := bootstrapRemote(spec); err != nil {
 		t.Fatalf("second Bootstrap: %v", err)
 	}
 	if len(chain.funded) != 1 {
@@ -232,14 +235,13 @@ func TestTempoRemoteBootstrapFundsOnlyShortAccounts(t *testing.T) {
 // node's pool would queue the new run behind them, so the run must not start.
 func TestTempoRemoteRefusesStuckSenders(t *testing.T) {
 	chain := newFakeTempo()
-	srv := chain.serve(t)
-	spec := tempoRemoteSpec(srv.URL)
+	spec := chain.serve(t)
 	spec.TempoFaucet = true
 	stuck := remoteSender(t, 2)
 	chain.nonces[stuck] = 3387
 	chain.pooled[stuck] = 221
 
-	err := (tempoRuntime{}).Bootstrap(context.Background(), spec, []messages.NodeTarget{{GlobalSeq: 0}})
+	err := bootstrapRemote(spec)
 	if err == nil || !strings.Contains(err.Error(), "unstick") || !strings.Contains(err.Error(), stuck.Hex()) {
 		t.Fatalf("err = %v, want the stuck sender named with the unstick fix", err)
 	}
@@ -253,20 +255,19 @@ func TestTempoRemoteRefusesStuckSenders(t *testing.T) {
 // before anything is sent.
 func TestTempoRemoteFundsFromIndex0(t *testing.T) {
 	chain := newFakeTempo()
-	srv := chain.serve(t)
-	spec := tempoRemoteSpec(srv.URL)
+	spec := chain.serve(t)
 	spec.NumAccounts = 40 // two funding transactions
 	spec.TempoFundFromIndex0 = true
 	root := remoteSender(t, 0)
 	chain.balances[root] = big.NewInt(10)
 
-	err := (tempoRuntime{}).Bootstrap(context.Background(), spec, []messages.NodeTarget{{GlobalSeq: 0}})
+	err := bootstrapRemote(spec)
 	if err == nil || !strings.Contains(err.Error(), root.Hex()) || len(chain.sent) != 0 {
 		t.Fatalf("err = %v with %d sent, want account 0 reported as short before sending", err, len(chain.sent))
 	}
 
 	chain.balances[root] = big.NewInt(1_000_000_000_000)
-	if err := (tempoRuntime{}).Bootstrap(context.Background(), spec, []messages.NodeTarget{{GlobalSeq: 0}}); err != nil {
+	if err := bootstrapRemote(spec); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 	if len(chain.sent) != 2 {
@@ -291,10 +292,9 @@ func TestTempoRemoteReserveMatchesChainFees(t *testing.T) {
 
 func TestTempoRemoteBootstrapWithoutFaucetNamesTheFix(t *testing.T) {
 	chain := newFakeTempo()
-	srv := chain.serve(t)
-	spec := tempoRemoteSpec(srv.URL)
+	spec := chain.serve(t)
 
-	err := (tempoRuntime{}).Bootstrap(context.Background(), spec, []messages.NodeTarget{{GlobalSeq: 0}})
+	err := bootstrapRemote(spec)
 	if err == nil || !strings.Contains(err.Error(), "tempo_faucet") {
 		t.Fatalf("err = %v, want unfunded accounts reported with the tempo_faucet fix", err)
 	}
@@ -306,11 +306,10 @@ func TestTempoRemoteBootstrapWithoutFaucetNamesTheFix(t *testing.T) {
 func TestTempoRemoteBootstrapRejectsWrongChain(t *testing.T) {
 	chain := newFakeTempo()
 	chain.chainID = 4217
-	srv := chain.serve(t)
-	spec := tempoRemoteSpec(srv.URL)
+	spec := chain.serve(t)
 	spec.TempoFaucet = true
 
-	err := (tempoRuntime{}).Bootstrap(context.Background(), spec, []messages.NodeTarget{{GlobalSeq: 0}})
+	err := bootstrapRemote(spec)
 	if err == nil || !strings.Contains(err.Error(), "wrong chain") {
 		t.Fatalf("err = %v, want a chain id mismatch", err)
 	}
@@ -324,75 +323,25 @@ func TestTempoRemoteBootstrapRejectsWrongChain(t *testing.T) {
 // own for key 0, the nonce precompile's for user keys.
 func TestTempoRemoteProduceTxsStartsFromChainNonces(t *testing.T) {
 	chain := newFakeTempo()
-	srv := chain.serve(t)
-	spec := tempoRemoteSpec(srv.URL)
+	spec := chain.serve(t)
 	spec.NumAccounts = 2
 	spec.NumTxs = 3
 	spec.TempoNonceLanes = 2
-	a, b := remoteSender(t, 1), remoteSender(t, 2)
+	a := remoteSender(t, 1)
 	chain.nonces[a] = 7
 	chain.keyNonces[a.Hex()+"/1"] = 3
 
-	txPath := filepath.Join(t.TempDir(), "txs.json")
-	if _, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: 0}, txPath); err != nil {
-		t.Fatalf("ProduceTxs: %v", err)
-	}
-	var raws []string
-	if err := readJSON(txPath, &raws); err != nil {
-		t.Fatal(err)
-	}
-
-	token := common.HexToAddress(tempoDefaultFeeToken)
-	mk := func(index int, self common.Address, nonceKey, nonce uint64) string {
-		key, _ := keygen.DeterministicKey(0, index, testPrivateMnemonic)
-		raw, err := (&tempotx.Tx{
-			ChainID: 42431, MaxPriorityFeePerGas: 1000000000, MaxFeePerGas: 3000000000,
-			GasLimit: 300000, NonceKey: nonceKey, Nonce: nonce, FeeToken: token,
-			Calls: []tempotx.Call{{To: token, Data: tempotx.Transfer(self, 1)}},
-		}).SignedRaw(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return raw
-	}
-	want := []string{
-		mk(1, a, 0, 7), mk(1, a, 1, 3), mk(1, a, 0, 8),
-		mk(2, b, 0, 0), mk(2, b, 1, 0), mk(2, b, 0, 1),
-	}
-	if len(raws) != len(want) {
-		t.Fatalf("got %d txs, want %d", len(raws), len(want))
-	}
-	for i := range want {
-		if raws[i] != want[i] {
-			t.Errorf("tx %d is not the expected account/lane/nonce", i)
-		}
-	}
-}
-
-// TestTempoGasFloorCoversNewNonceKey: the first transaction on a user nonce
-// key pays 22,100 gas more, so a limit that clears the key-0 floor can still
-// be rejected once lanes or a nonce key are set.
-func TestTempoGasFloorCoversNewNonceKey(t *testing.T) {
-	spec := messages.BenchmarkSpec{TxType: messages.ERC20TransferTx, ERC20TransferGas: 280000}
-	if err := (tempoRuntime{}).EnrichSpec(&spec); err != nil {
-		t.Fatalf("key 0: %v", err)
-	}
-	for _, s := range []messages.BenchmarkSpec{
-		{TxType: messages.ERC20TransferTx, ERC20TransferGas: 280000, TempoNonceLanes: 2},
-		{TxType: messages.ERC20TransferTx, ERC20TransferGas: 280000, TempoNonceKey: 5},
-	} {
-		if err := (tempoRuntime{}).EnrichSpec(&s); err == nil || !strings.Contains(err.Error(), "nonce keys") {
-			t.Errorf("lanes=%d key=%d: err = %v, want the nonce-key surcharge enforced", s.TempoNonceLanes, s.TempoNonceKey, err)
-		}
-	}
+	assertTxs(t, produceTempoTxs(t, spec, 0), []string{
+		wantTempoTx(t, spec, 1, 0, 7), wantTempoTx(t, spec, 1, 1, 3), wantTempoTx(t, spec, 1, 0, 8),
+		wantTempoTx(t, spec, 2, 0, 0), wantTempoTx(t, spec, 2, 1, 0), wantTempoTx(t, spec, 2, 0, 1),
+	})
 }
 
 // TestGenerateLayoutRemote: a remote layout points every node at the endpoint
 // and generates no devnet, so it needs neither tempo binary.
 func TestGenerateLayoutRemote(t *testing.T) {
 	chain := newFakeTempo()
-	srv := chain.serve(t)
-	spec := tempoRemoteSpec(srv.URL)
+	spec := chain.serve(t)
 	spec.TempoFaucet = true
 	spec.DataDir = t.TempDir()
 
@@ -400,8 +349,8 @@ func TestGenerateLayoutRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateLayout: %v", err)
 	}
-	if len(res.Nodes) != 1 || res.Nodes[0].RPCURL != srv.URL {
-		t.Fatalf("nodes = %+v, want one node on %s", res.Nodes, srv.URL)
+	if len(res.Nodes) != 1 || res.Nodes[0].RPCURL != spec.RemoteRPCURL {
+		t.Fatalf("nodes = %+v, want one node on %s", res.Nodes, spec.RemoteRPCURL)
 	}
 	if _, err := os.Stat(devnetDir(spec)); !os.IsNotExist(err) {
 		t.Errorf("a devnet was generated for a remote run (stat err = %v)", err)

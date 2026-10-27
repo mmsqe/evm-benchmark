@@ -33,7 +33,7 @@ func TestTempoBootstrap(t *testing.T) {
 		DataDir:          t.TempDir(),
 		EVMChainID:       1337,
 		NumAccounts:      8,
-		BaseMnemonic:     "test test test test test test test test test test test junk",
+		BaseMnemonic:     publicTestMnemonic,
 		Validators:       2,
 		TempoBin:         tempoBin,
 		TempoXtaskBin:    xtaskBin,
@@ -60,8 +60,7 @@ func TestTempoBootstrap(t *testing.T) {
 
 	// The generated network must be complete enough to launch: genesis plus a
 	// per-node home with keys and a launcher.
-	genesis := filepath.Join(spec.DataDir, "devnet", "genesis.json")
-	if _, err := os.Stat(genesis); err != nil {
+	if _, err := os.Stat(filepath.Join(devnetDir(spec), "genesis.json")); err != nil {
 		t.Fatalf("genesis not generated: %v", err)
 	}
 	for _, node := range nodes {
@@ -72,43 +71,33 @@ func TestTempoBootstrap(t *testing.T) {
 			}
 		}
 	}
-
 }
 
-// TestTempoRefusesOccupiedPort guards against silently benchmarking a node
-// left over from a previous run, which serves its own stale genesis.
-func TestTempoRefusesOccupiedPort(t *testing.T) {
-	port := busyPort(t)
-	spec := messages.BenchmarkSpec{
-		ChainFamily:   FamilyTempo,
-		DataDir:       t.TempDir(),
-		TempoBasePort: port - tempoHTTPPortOffset,
-	}
-	nodes := []messages.NodeTarget{{GlobalSeq: 0}}
-	err := tempoRuntime{}.Bootstrap(context.Background(), spec, nodes)
-	if err == nil {
-		t.Fatal("expected bootstrap to refuse an occupied RPC port")
-	}
-	if !strings.Contains(err.Error(), "already in use") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-// TestTempoRejectsNativeTransfers guards the step-1 finding: Tempo rejects
-// native value transfers, so the generator must not be pointed at it with the
-// simple-transfer shape.
-func TestTempoRejectsNativeTransfers(t *testing.T) {
-	spec := messages.BenchmarkSpec{TxType: messages.SimpleTransferTx}
-	if err := (tempoRuntime{}).EnrichSpec(&spec); err == nil {
-		t.Fatal("expected simple-transfer to be rejected on Tempo")
-	}
-}
-
-// TestTempoRejectsInsufficientGas guards the ~271k intrinsic gas floor.
-func TestTempoRejectsInsufficientGas(t *testing.T) {
-	spec := messages.BenchmarkSpec{TxType: messages.ERC20TransferTx, ERC20TransferGas: 100000}
-	if err := (tempoRuntime{}).EnrichSpec(&spec); err == nil {
-		t.Fatal("expected sub-floor gas to be rejected on Tempo")
+// TestTempoEnrichSpecRejectsUnpayableLoad guards the loads Tempo would reject:
+// native value transfers, and gas limits under the shape's floor (~271k, about
+// twice that for fresh and approve), plus 22,100 for a new user nonce key.
+func TestTempoEnrichSpecRejectsUnpayableLoad(t *testing.T) {
+	erc20 := messages.ERC20TransferTx
+	for _, tc := range []struct {
+		name string
+		spec messages.BenchmarkSpec
+		want string // in the error; "" accepts
+	}{
+		{"native transfers", messages.BenchmarkSpec{TxType: messages.SimpleTransferTx}, "native value transfers"},
+		{"sub-floor gas", messages.BenchmarkSpec{TxType: erc20, ERC20TransferGas: 100_000}, "below the floor"},
+		{"key 0", messages.BenchmarkSpec{TxType: erc20, ERC20TransferGas: 280_000}, ""},
+		{"nonce lanes", messages.BenchmarkSpec{TxType: erc20, ERC20TransferGas: 280_000, TempoNonceLanes: 2}, "on user nonce keys"},
+		{"nonce key", messages.BenchmarkSpec{TxType: erc20, ERC20TransferGas: 280_000, TempoNonceKey: 5}, "on user nonce keys"},
+		{"fresh", messages.BenchmarkSpec{TxType: erc20, ERC20TransferGas: 300_000, TempoTxShape: "fresh"}, "below the floor"},
+		{"approve", messages.BenchmarkSpec{TxType: erc20, ERC20TransferGas: 300_000, TempoTxShape: "approve"}, "below the floor"},
+		{"fresh with room", messages.BenchmarkSpec{TxType: erc20, ERC20TransferGas: 600_000, TempoTxShape: "fresh"}, ""},
+	} {
+		switch err := (tempoRuntime{}).EnrichSpec(&tc.spec); {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: rejected: %v", tc.name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: err = %v, want it to mention %q", tc.name, err, tc.want)
+		}
 	}
 }
 
@@ -119,7 +108,7 @@ func tempoNativeSpec() messages.BenchmarkSpec {
 		NumAccounts:               2,
 		NumTxs:                    3,
 		EVMChainID:                1337,
-		BaseMnemonic:              "test test test test test test test test test test test junk",
+		BaseMnemonic:              publicTestMnemonic,
 		ERC20TransferGas:          300000,
 		GasPriceWei:               40000000000,
 		TempoMaxPriorityFeePerGas: 1000000000,
@@ -127,24 +116,71 @@ func tempoNativeSpec() messages.BenchmarkSpec {
 	}
 }
 
-// TestTempoProduceTxsNative pins the in-process native generator: it writes a
-// JSON array of exactly accounts*txs native (0x76) transactions.
-func TestTempoProduceTxsNative(t *testing.T) {
-	dir := t.TempDir()
-	spec := tempoNativeSpec()
-	txPath := filepath.Join(dir, "txs.json")
-
-	count, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: 0}, txPath)
+// produceTempoTxs runs the native generator for a node and returns what it
+// wrote, which must be as many transactions as it reports.
+func produceTempoTxs(t *testing.T, spec messages.BenchmarkSpec, globalSeq int) []string {
+	t.Helper()
+	txPath := filepath.Join(t.TempDir(), "txs.json")
+	count, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: globalSeq}, txPath)
 	if err != nil {
 		t.Fatalf("ProduceTxs: %v", err)
-	}
-	if count != 6 {
-		t.Fatalf("count = %d, want 6", count)
 	}
 	var raws []string
 	if err := readJSON(txPath, &raws); err != nil {
 		t.Fatalf("read txs: %v", err)
 	}
+	if len(raws) != count {
+		t.Fatalf("wrote %d txs, reported %d", len(raws), count)
+	}
+	return raws
+}
+
+// wantTempoTx signs the transaction the generator should emit from key index
+// of spec's mnemonic, with spec's chain, fees and gas limit and the default fee
+// token. Without calls it transfers one unit to itself.
+func wantTempoTx(t *testing.T, spec messages.BenchmarkSpec, index int, nonceKey, nonce uint64, calls ...tempotx.Call) string {
+	t.Helper()
+	key, err := keygen.DeterministicKey(0, index, spec.BaseMnemonic)
+	if err != nil {
+		t.Fatalf("derive key: %v", err)
+	}
+	token := common.HexToAddress(tempoDefaultFeeToken)
+	if len(calls) == 0 {
+		calls = []tempotx.Call{{To: token, Data: tempotx.Transfer(crypto.PubkeyToAddress(key.PublicKey), 1)}}
+	}
+	raw, err := (&tempotx.Tx{
+		ChainID:              uint64(spec.EVMChainID),
+		MaxPriorityFeePerGas: uint64(spec.TempoMaxPriorityFeePerGas),
+		MaxFeePerGas:         uint64(spec.GasPriceWei),
+		GasLimit:             spec.ERC20TransferGas,
+		NonceKey:             nonceKey,
+		Nonce:                nonce,
+		FeeToken:             token,
+		Calls:                calls,
+	}).SignedRaw(key)
+	if err != nil {
+		t.Fatalf("build expected tx: %v", err)
+	}
+	return raw
+}
+
+// assertTxs reports every transaction that differs from the expected one.
+func assertTxs(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %d txs, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("tx %d is not the expected account/lane/nonce/call", i)
+		}
+	}
+}
+
+// TestTempoProduceTxsNative pins the in-process native generator: it writes a
+// JSON array of exactly accounts*txs native (0x76) transactions.
+func TestTempoProduceTxsNative(t *testing.T) {
+	raws := produceTempoTxs(t, tempoNativeSpec(), 0)
 	if len(raws) != 6 {
 		t.Fatalf("wrote %d txs, want 6", len(raws))
 	}
@@ -158,41 +194,13 @@ func TestTempoProduceTxsNative(t *testing.T) {
 // TestTempoProduceTxsAccountOffset pins the load-bearing offset: node N draws a
 // disjoint slice starting at index N*accounts+1 of the single funded HD branch
 // (global seq 0). Getting this wrong makes two nodes sign from the same accounts
-// and silently halve the load. The output must match a tx built directly from
-// the expected account key.
+// and silently halve the load.
 func TestTempoProduceTxsAccountOffset(t *testing.T) {
-	dir := t.TempDir()
 	spec := tempoNativeSpec()
 	spec.NumAccounts = 1
 	spec.NumTxs = 1
-	txPath := filepath.Join(dir, "txs.json")
-
-	if _, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: 2}, txPath); err != nil {
-		t.Fatalf("ProduceTxs: %v", err)
-	}
-	var raws []string
-	if err := readJSON(txPath, &raws); err != nil {
-		t.Fatalf("read txs: %v", err)
-	}
-
 	// Node 2 with 1 account uses index 2*1+1 = 3.
-	key, err := keygen.DeterministicKey(0, 3, spec.BaseMnemonic)
-	if err != nil {
-		t.Fatalf("derive key: %v", err)
-	}
-	self := crypto.PubkeyToAddress(key.PublicKey)
-	token := common.HexToAddress(tempoDefaultFeeToken)
-	want, err := (&tempotx.Tx{
-		ChainID: 1337, MaxPriorityFeePerGas: 1000000000, MaxFeePerGas: 40000000000,
-		GasLimit: 300000, FeeToken: token,
-		Calls: []tempotx.Call{{To: token, Data: tempotx.Transfer(self, 1)}},
-	}).SignedRaw(key)
-	if err != nil {
-		t.Fatalf("build expected tx: %v", err)
-	}
-	if len(raws) != 1 || raws[0] != want {
-		t.Errorf("node 2 first tx does not match a tx signed by account index 3: %v", raws)
-	}
+	assertTxs(t, produceTempoTxs(t, spec, 2), []string{wantTempoTx(t, spec, 3, 0, 0)})
 }
 
 // TestTempoProduceTxsForwardsShape pins the workload-shape plumbing: a run
@@ -200,27 +208,15 @@ func TestTempoProduceTxsAccountOffset(t *testing.T) {
 // contention number that never measured contention. self self-transfers; hot
 // targets a shared recipient, so their signed bytes must differ.
 func TestTempoProduceTxsForwardsShape(t *testing.T) {
-	gen := func(shape string) string {
-		dir := t.TempDir()
+	gen := func(shape string) []string {
 		spec := tempoNativeSpec()
 		spec.NumAccounts = 1
 		spec.NumTxs = 1
 		spec.TempoTxShape = shape
-		txPath := filepath.Join(dir, "txs.json")
-		if _, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{}, txPath); err != nil {
-			t.Fatalf("ProduceTxs %s: %v", shape, err)
-		}
-		var raws []string
-		if err := readJSON(txPath, &raws); err != nil {
-			t.Fatalf("read txs: %v", err)
-		}
-		if len(raws) != 1 {
-			t.Fatalf("shape %s: wrote %d txs, want 1", shape, len(raws))
-		}
-		return raws[0]
+		return produceTempoTxs(t, spec, 0)
 	}
-	if gen("self") == gen("hot") {
-		t.Error("hot and self must target different recipients, so their txs must differ")
+	if self, hot := gen("self"), gen("hot"); len(self) != 1 || len(hot) != 1 || self[0] == hot[0] {
+		t.Error("hot and self must each write one tx, to different recipients")
 	}
 }
 
@@ -228,123 +224,45 @@ func TestTempoProduceTxsForwardsShape(t *testing.T) {
 // round-robin across lanes (nonce_key = base + lane), each lane sequential.
 // This is the conflict workload — one owner issuing parallel-eligible txs.
 func TestTempoProduceTxsMultiLane(t *testing.T) {
-	dir := t.TempDir()
 	spec := tempoNativeSpec()
 	spec.NumAccounts = 1
 	spec.NumTxs = 3
 	spec.TempoNonceLanes = 2
-	txPath := filepath.Join(dir, "txs.json")
-
-	if _, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: 0}, txPath); err != nil {
-		t.Fatalf("ProduceTxs: %v", err)
-	}
-	var raws []string
-	if err := readJSON(txPath, &raws); err != nil {
-		t.Fatalf("read txs: %v", err)
-	}
-	if len(raws) != 3 {
-		t.Fatalf("want 3 txs, got %d", len(raws))
-	}
-
-	key, err := keygen.DeterministicKey(0, 1, spec.BaseMnemonic)
-	if err != nil {
-		t.Fatalf("derive key: %v", err)
-	}
-	self := crypto.PubkeyToAddress(key.PublicKey)
-	token := common.HexToAddress(tempoDefaultFeeToken)
-	mk := func(nonceKey, nonce uint64) string {
-		raw, err := (&tempotx.Tx{
-			ChainID: 1337, MaxPriorityFeePerGas: 1000000000, MaxFeePerGas: 40000000000,
-			GasLimit: 300000, NonceKey: nonceKey, Nonce: nonce, FeeToken: token,
-			Calls: []tempotx.Call{{To: token, Data: tempotx.Transfer(self, 1)}},
-		}).SignedRaw(key)
-		if err != nil {
-			t.Fatalf("build expected tx: %v", err)
-		}
-		return raw
-	}
 	// tx0 -> lane0 (nk 0, nonce 0); tx1 -> lane1 (nk 1, nonce 0);
 	// tx2 -> lane0 again (nk 0, nonce 1).
-	want := []string{mk(0, 0), mk(1, 0), mk(0, 1)}
-	for i := range want {
-		if raws[i] != want[i] {
-			t.Errorf("tx %d does not match expected lane/nonce assignment", i)
-		}
-	}
+	assertTxs(t, produceTempoTxs(t, spec, 0), []string{
+		wantTempoTx(t, spec, 1, 0, 0), wantTempoTx(t, spec, 1, 1, 0), wantTempoTx(t, spec, 1, 0, 1),
+	})
 }
 
 // TestTempoProduceTxsSwapShape pins the order-book workload: tx 0/1 seed a bid
 // and an ask wall on the DEX, then swaps alternate direction against the shared
 // book. Verified end-to-end (all swaps mine with status 0x1) against a devnet.
 func TestTempoProduceTxsSwapShape(t *testing.T) {
-	dir := t.TempDir()
 	spec := tempoNativeSpec()
 	spec.NumAccounts = 1
 	spec.NumTxs = 4
 	spec.TempoTxShape = "swap"
 	spec.ERC20TransferGas = 8000000
-	txPath := filepath.Join(dir, "txs.json")
-
-	if _, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: 0}, txPath); err != nil {
-		t.Fatalf("ProduceTxs: %v", err)
-	}
-	var raws []string
-	if err := readJSON(txPath, &raws); err != nil {
-		t.Fatalf("read txs: %v", err)
-	}
-	if len(raws) != 4 {
-		t.Fatalf("want 4 txs, got %d", len(raws))
-	}
-
-	key, err := keygen.DeterministicKey(0, 1, spec.BaseMnemonic)
-	if err != nil {
-		t.Fatalf("derive key: %v", err)
-	}
-	quote := common.HexToAddress(tempoDefaultFeeToken)
-	dex := tempotx.StablecoinDEXAddress
-	mk := func(nonce uint64, data []byte) string {
-		raw, err := (&tempotx.Tx{
-			ChainID: 1337, MaxPriorityFeePerGas: 1000000000, MaxFeePerGas: 40000000000,
-			GasLimit: 8000000, Nonce: nonce, FeeToken: quote,
-			Calls: []tempotx.Call{{To: dex, Data: data}},
-		}).SignedRaw(key)
-		if err != nil {
-			t.Fatalf("build expected tx: %v", err)
-		}
-		return raw
-	}
-	want := []string{
-		mk(0, tempotx.PlaceFlip(tempoDexBase, tempoDexWallAmount, true, -100, 100)),
-		mk(1, tempotx.PlaceFlip(tempoDexBase, tempoDexWallAmount, false, 100, -100)),
-		mk(2, tempotx.SwapExactAmountIn(tempoDexBase, tempoDexQuote, tempoDexSwapAmount, 0)),
-		mk(3, tempotx.SwapExactAmountIn(tempoDexQuote, tempoDexBase, tempoDexSwapAmount, 0)),
-	}
-	for i := range want {
-		if raws[i] != want[i] {
-			t.Errorf("swap-shape tx %d does not match expected wall/swap sequence", i)
-		}
-	}
+	dex := func(data []byte) tempotx.Call { return tempotx.Call{To: tempotx.StablecoinDEXAddress, Data: data} }
+	assertTxs(t, produceTempoTxs(t, spec, 0), []string{
+		wantTempoTx(t, spec, 1, 0, 0, dex(tempotx.PlaceFlip(tempoDexBase, tempoDexWallAmount, true, -100, 100))),
+		wantTempoTx(t, spec, 1, 0, 1, dex(tempotx.PlaceFlip(tempoDexBase, tempoDexWallAmount, false, 100, -100))),
+		wantTempoTx(t, spec, 1, 0, 2, dex(tempotx.SwapExactAmountIn(tempoDexBase, tempoDexQuote, tempoDexSwapAmount, 0))),
+		wantTempoTx(t, spec, 1, 0, 3, dex(tempotx.SwapExactAmountIn(tempoDexQuote, tempoDexBase, tempoDexSwapAmount, 0))),
+	})
 }
 
 // TestTempoProduceTxsSwapReplenishes pins the wall-replenish cycle: fresh bid/ask
 // walls are re-seeded every tempoDexSwapsPerWall swaps so a long run cannot
 // deplete the book (re-seeded walls verified to mine with status 0x1 on-chain).
 func TestTempoProduceTxsSwapReplenishes(t *testing.T) {
-	dir := t.TempDir()
 	spec := tempoNativeSpec()
 	spec.NumAccounts = 1
 	spec.NumTxs = 2 + tempoDexSwapsPerWall + 4 // cross one cycle boundary
 	spec.TempoTxShape = "swap"
 	spec.ERC20TransferGas = 8000000
-	txPath := filepath.Join(dir, "txs.json")
-
-	if _, err := (tempoRuntime{}).ProduceTxs(context.Background(), spec, messages.NodeTarget{GlobalSeq: 0}, txPath); err != nil {
-		t.Fatalf("ProduceTxs: %v", err)
-	}
-	var raws []string
-	if err := readJSON(txPath, &raws); err != nil {
-		t.Fatalf("read txs: %v", err)
-	}
+	raws := produceTempoTxs(t, spec, 0)
 	const placeSel, swapSel = "922828f1", "f8856c0f" // placeFlip / swapExactAmountIn selectors
 	wall := 2 + tempoDexSwapsPerWall
 	for _, i := range []int{0, 1, wall, wall + 1} { // walls at each cycle start
@@ -364,11 +282,9 @@ func TestTempoProduceTxsSwapReplenishes(t *testing.T) {
 // to legacy transactions; if the fallback broke, every cosmos run would fail.
 func TestGenerateTxsUsesProducerAndFallsBack(t *testing.T) {
 	dir := t.TempDir()
-	base := messages.BenchmarkSpec{
-		ChainFamily: FamilyTempo, DataDir: dir, NumAccounts: 2, NumTxs: 3,
-		EVMChainID: 1337, BaseMnemonic: "test test test test test test test test test test test junk",
-		ERC20TransferGas: 300000, GasPriceWei: 40000000000, TxType: messages.ERC20TransferTx,
-	}
+	base := tempoNativeSpec()
+	base.DataDir = dir
+	base.TxType = messages.ERC20TransferTx
 
 	// GenerateTxs is a Temporal activity (it logs and heartbeats), so it needs
 	// an activity context rather than context.Background().

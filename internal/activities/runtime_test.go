@@ -74,78 +74,41 @@ func TestCosmosValidateRequiresBinary(t *testing.T) {
 }
 
 func TestTempoDockerValidation(t *testing.T) {
-	base := messages.BenchmarkSpec{
-		RunnerType:       "docker",
-		TempoDockerImage: "ghcr.io/tempoxyz/tempo:latest",
-		Validators:       4,
-	}
-	if err := (tempoRuntime{}).Validate(base); err != nil {
+	ok := messages.BenchmarkSpec{RunnerType: "docker", TempoDockerImage: "ghcr.io/tempoxyz/tempo:latest", Validators: 4}
+	if err := (tempoRuntime{}).Validate(ok); err != nil {
 		t.Fatalf("valid docker spec rejected: %v", err)
 	}
-
-	// Compose owns the lifecycle, so the per-node launcher must stay off.
-	starting := base
-	starting.StartNode = true
-	if err := (tempoRuntime{}).Validate(starting); err == nil {
-		t.Error("expected start_node=true to be rejected in docker mode")
-	}
-
-	// The docker launcher derives trusted peers from the OTHER validators, so a
-	// single-node docker devnet boots with an empty --trusted-peers.
-	single := base
-	single.Validators = 1
-	if err := (tempoRuntime{}).Validate(single); err == nil {
-		t.Error("expected validators<2 to be rejected in docker mode")
-	}
-
-	noImage := base
-	noImage.TempoDockerImage = ""
-	if err := (tempoRuntime{}).Validate(noImage); err == nil {
-		t.Error("expected a missing image to be rejected in docker mode")
-	}
-}
-
-func TestTempoRejectsInsufficientGasForShape(t *testing.T) {
-	base := messages.BenchmarkSpec{TxType: messages.ERC20TransferTx, ERC20TransferGas: 300000}
-	// 300k covers a plain transfer...
-	if err := (tempoRuntime{}).EnrichSpec(&base); err != nil {
-		t.Errorf("300k gas must cover the default shape: %v", err)
-	}
-	// ...but not fresh or approve, which cost ~2x (state creation / allowance write).
-	for _, shape := range []string{"fresh", "approve"} {
-		spec := messages.BenchmarkSpec{TxType: messages.ERC20TransferTx, ERC20TransferGas: 300000, TempoTxShape: shape}
-		if err := (tempoRuntime{}).EnrichSpec(&spec); err == nil {
-			t.Errorf("shape %q must be rejected when erc20_transfer_gas is below its floor", shape)
+	for name, mutate := range map[string]func(*messages.BenchmarkSpec){
+		// Compose owns the lifecycle, so the per-node launcher must stay off.
+		"start_node": func(s *messages.BenchmarkSpec) { s.StartNode = true },
+		// The docker launcher derives trusted peers from the OTHER validators, so a
+		// single-node docker devnet boots with an empty --trusted-peers.
+		"one validator": func(s *messages.BenchmarkSpec) { s.Validators = 1 },
+		"no image":      func(s *messages.BenchmarkSpec) { s.TempoDockerImage = "" },
+	} {
+		spec := ok
+		mutate(&spec)
+		if err := (tempoRuntime{}).Validate(spec); err == nil {
+			t.Errorf("%s: accepted in docker mode", name)
 		}
-	}
-	// A sufficient limit passes.
-	freshOK := messages.BenchmarkSpec{TxType: messages.ERC20TransferTx, ERC20TransferGas: 600000, TempoTxShape: "fresh"}
-	if err := (tempoRuntime{}).EnrichSpec(&freshOK); err != nil {
-		t.Errorf("600k gas must cover fresh: %v", err)
 	}
 }
 
 func TestTempoRejectsMultiNodeLegacyLoad(t *testing.T) {
 	// The legacy signer derives node N from HD branch N, which tempo-xtask
 	// never funds; only the native generator partitions the funded branch.
-	legacy := messages.BenchmarkSpec{
-		RunnerType: "local", Validators: 4, ValidatorGenerateLoad: true,
-		TempoLegacyTxs: true,
-	}
+	legacy := messages.BenchmarkSpec{RunnerType: "local", Validators: 4, ValidatorGenerateLoad: true, TempoLegacyTxs: true}
 	if err := (tempoRuntime{}).Validate(legacy); err == nil {
 		t.Error("expected multi-node legacy load to be rejected as unfunded")
 	}
-	// The native generator (the default) partitions accounts, so multi-node is fine.
-	native := legacy
+	// The native generator (the default) and a single validator are fine.
+	native, single := legacy, legacy
 	native.TempoLegacyTxs = false
-	if err := (tempoRuntime{}).Validate(native); err != nil {
-		t.Errorf("native multi-node load must be allowed: %v", err)
-	}
-	// A single validator is unaffected either way.
-	single := legacy
 	single.Validators = 1
-	if err := (tempoRuntime{}).Validate(single); err != nil {
-		t.Errorf("single-validator legacy load must be allowed: %v", err)
+	for name, spec := range map[string]messages.BenchmarkSpec{"native multi-node": native, "single-validator legacy": single} {
+		if err := (tempoRuntime{}).Validate(spec); err != nil {
+			t.Errorf("%s load must be allowed: %v", name, err)
+		}
 	}
 }
 
