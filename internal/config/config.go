@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -169,15 +168,9 @@ func applyChainConfig(configPath string, cfg *AppConfig) error {
 	// does not depend on the worker process current working directory.
 	spec.ChainsConfigPath = chainsPath
 
-	if _, err := exec.LookPath("jsonnet"); err != nil {
-		return fmt.Errorf("jsonnet binary not found in PATH: %w", err)
-	}
-
-	query := fmt.Sprintf("local chains = import %q; chains[std.extVar(\"CHAIN_CONFIG\") ]", chainsPath)
-	cmd := exec.Command("jsonnet", "--ext-str", "CHAIN_CONFIG="+spec.ChainConfig, "-e", query)
-	out, err := cmd.CombinedOutput()
+	out, err := EvaluateChainProfile(chainsPath, spec.ChainConfig)
 	if err != nil {
-		return fmt.Errorf("resolve chain config via jsonnet: %w\n%s", err, string(out))
+		return err
 	}
 
 	var record chainConfigRecord
@@ -220,6 +213,18 @@ func applyChainConfig(configPath string, cfg *AppConfig) error {
 	}
 
 	return nil
+}
+
+// EvaluateChainProfile returns the profile called name from the chains jsonnet
+// file at chainsPath, as JSON. Only that profile is evaluated.
+func EvaluateChainProfile(chainsPath, name string) ([]byte, error) {
+	vm := jsonnet.MakeVM()
+	vm.ExtVar("CHAIN_CONFIG", name)
+	out, err := vm.EvaluateAnonymousSnippet("chain_config", fmt.Sprintf("(import %q)[std.extVar('CHAIN_CONFIG')]", chainsPath))
+	if err != nil {
+		return nil, fmt.Errorf("resolve chain config %q: %w", name, err)
+	}
+	return []byte(out), nil
 }
 
 func mergeMaps(dst, src map[string]interface{}) {

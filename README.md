@@ -41,9 +41,9 @@ tempo {
 ```
 
 `+:` merges into the inherited object, `:` replaces a field and `::` hides it.
-Configs are evaluated in-process. A relative path in a config, such as
-`chains_config_path`, resolves against the file passed to `-config`. Jsonnet
-numbers are doubles, so write integers above 2^53 as strings. YAML configs
+Configs and chain profiles are evaluated in-process. A relative path in a
+config, such as `chains_config_path`, resolves against the file passed to
+`-config`. Jsonnet numbers are doubles, so write integers above 2^53 as strings. YAML configs
 still load.
 
 ## Measuring
@@ -423,30 +423,34 @@ needs no reth binary.
 
 ## Comparing chains
 
-Run the three examples one at a time on the same host:
+Run the examples one at a time on the same host:
 
 ```bash
 scripts/run-benchmark.sh --mode local   run   # evmd
 scripts/run-benchmark.sh --mode tempo   run   # tempo
 scripts/run-benchmark.sh --mode allegro run   # allegro
+scripts/run-benchmark.sh --mode reth    run   # reth
 ```
 
-They hold everything that drives a chain identical — concurrency 32, batch size
-100, a never-pausing watermark, derived pool capacity, a non-binding 3e9 block
-gas limit, one validator, `num_idle: 40`. The **load is not shared**:
+The first three hold everything that drives a chain identical — concurrency 32,
+batch size 100, a never-pausing watermark, derived pool capacity, a non-binding
+3e9 block gas limit, one validator, `num_idle: 40`. reth's example sends wider,
+at concurrency 64 and batch size 200 with `num_idle: 10`, under a 1e10 gas
+limit (see [Throughput](#throughput)). The **load is not shared**:
 `full_second` is a rate, so sizes may differ as long as each run is saturated
 and spans five whole seconds, and no single size manages that everywhere.
 
 | chain | load | full_second | peak backlog | saturated? |
 |---|---|---|---|---|
+| reth | 2,000,000 | 102,920 | under 300,000 (15%) | no — lower bound |
 | allegro | 500,000 | 78,292 | 8,360 (1.7%) | no — lower bound |
 | tempo | 500,000 | 55,248 | 31,581 (6.3%) | no — lower bound |
 | evmd | 200,000 | **11,426** | 76,466 (38%) | yes |
 
-Only evmd was made to work at capacity; the other two drained the load as fast
-as it arrived and carry `send_warning`, so their figures mean "at least this
-fast". Raising the load alone will not fix that — the sender has to outrun the
-chain, which for these two means constraining block production.
+Only evmd was made to work at capacity; the other three drained the load as
+fast as it arrived and carry `send_warning`, so their figures mean "at least
+this fast". Raising the load alone will not fix that — the sender has to outrun
+the chain, which for these means constraining block production.
 
 Two things to know before changing the loads:
 
@@ -461,8 +465,9 @@ Two things to know before changing the loads:
   2,000 x 100 shape.
 - **Not aligned, and worth stating with any number:** transaction shape (evmd
   and allegro run the same 21,000-gas native transfer; tempo rejects native
-  transfers and runs a ~271,000-gas TIP-20 one) and block cadence, which is each
-  chain's own consensus default. The allegro row is its `main` branch.
+  transfers and runs a ~271,000-gas TIP-20 one; reth transfers the ERC-20 token
+  its genesis deploys) and block cadence, which is each chain's own consensus
+  default and reth's 1s `reth_block_time`. The allegro row is its `main` branch.
 
 ## Local Mode
 

@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mmsqe/evm-benchmark/internal/bench"
+	"github.com/mmsqe/evm-benchmark/internal/config"
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 	"github.com/mmsqe/evm-benchmark/internal/tempotx"
@@ -181,14 +182,9 @@ func enrichGenesisPatchFromChainConfig(spec *messages.BenchmarkSpec) error {
 		return fmt.Errorf("chains config file %q: %w", chainsPath, err)
 	}
 
-	if _, err := exec.LookPath("jsonnet"); err != nil {
-		return fmt.Errorf("jsonnet binary not found in PATH: %w", err)
-	}
-
-	query := fmt.Sprintf("local chains = import %q; chains[std.extVar(\"CHAIN_CONFIG\") ]", chainsPath)
-	out, err := chainCmd(context.Background(), "jsonnet", nil, "--ext-str", "CHAIN_CONFIG="+spec.ChainConfig, "-e", query)
+	out, err := config.EvaluateChainProfile(chainsPath, spec.ChainConfig)
 	if err != nil {
-		return fmt.Errorf("resolve chain config via jsonnet: %w", err)
+		return err
 	}
 
 	var record chainConfigRecord
