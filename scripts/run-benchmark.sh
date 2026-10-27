@@ -165,60 +165,57 @@ else
   export CHAIN_CONFIG
 fi
 
-RUN_WORKER_PID=""
 RUN_TEMPORAL_PID=""
+RUN_WORKER_PID=""
+RUN_STARTER_PID=""
 LAST_LAUNCHED_PID=""
+# The worker and starter run as binaries built here rather than via `go run`,
+# which dies on TERM and leaves the program it started running.
+BIN_DIR="${TMPDIR:-/tmp}/evm-benchmark-bin"
 
 log_step() {
   local msg="$1"
   printf '[run-benchmark] %s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$msg"
 }
 
-start_prefixed_group() {
+# Runs a command in the background with its output prefixed and records its PID
+# in LAST_LAUNCHED_PID. No shell sits between the two, so a signal to that PID
+# reaches the command itself.
+start_prefixed() {
   local prefix="$1"
   shift
-
-  # Start each long-running command in its own process group so cleanup can
-  # terminate the full pipeline instead of only the parent shell.
-  if command -v setsid >/dev/null 2>&1; then
-    setsid bash -c "$* 2>&1 | sed -u 's/^/[$prefix] /'" &
-  else
-    bash -c "$* 2>&1 | sed -u 's/^/[$prefix] /'" &
-  fi
+  "$@" > >(sed -u "s/^/[$prefix] /") 2>&1 &
   LAST_LAUNCHED_PID="$!"
 }
 
-terminate_matching_processes() {
-  local pattern="$1"
-  local grace_seconds="${2:-5}"
-  local deadline=$((SECONDS + grace_seconds))
-  local pids=()
+# Sends TERM to the given PIDs, then KILL to any still running after the grace
+# period.
+terminate_pids() {
+  local grace_seconds="$1"
+  shift
+  (( $# > 0 )) || return 0
 
-  mapfile -t pids < <(pgrep -f "$pattern" || true)
-  if [[ ${#pids[@]} -eq 0 ]]; then
-    return
-  fi
-
-  kill -TERM "${pids[@]}" >/dev/null 2>&1 || true
-
+  kill -TERM "$@" 2>/dev/null || true
+  local deadline=$((SECONDS + grace_seconds)) pid running
   while (( SECONDS < deadline )); do
-    local still_running=0
-    local pid
-    for pid in "${pids[@]}"; do
+    running=0
+    for pid in "$@"; do
       if kill -0 "$pid" 2>/dev/null; then
-        still_running=1
+        running=1
         break
       fi
     done
-
-    if (( still_running == 0 )); then
-      return
-    fi
-
+    (( running )) || return 0
     sleep 0.2
   done
+  kill -KILL "$@" 2>/dev/null || true
+}
 
-  kill -KILL "${pids[@]}" >/dev/null 2>&1 || true
+terminate_matching_processes() {
+  local pids=()
+  mapfile -t pids < <(pgrep -f "$1" || true)
+  (( ${#pids[@]} > 0 )) || return 0
+  terminate_pids "${2:-5}" "${pids[@]}"
 }
 
 wait_for_tcp_port() {
@@ -306,12 +303,15 @@ stop_runtime() {
   cleanup_benchmark_workflows
 
   # Stop workers first so gRPC polls exit cleanly before Temporal shuts down.
-  terminate_matching_processes "go run ./cmd/worker -config" 8
-  terminate_matching_processes "cmd/worker -config" 8
+  # The pattern matches the built binary and a `go run ./cmd/worker` alike.
   terminate_matching_processes "/worker -config" 8
-  terminate_matching_processes "/exe/worker -config" 8
   terminate_matching_processes "temporal server start-dev" 5
+  stop_nodes
+  log_step "stop: runtime cleanup complete"
+}
 
+# Stops the nodes a run in this mode started.
+stop_nodes() {
   case "$MODE" in
     docker) cleanup_benchmark_containers ;;
     # Tempo nodes are launched from the generated per-node run.sh wrapper.
@@ -328,7 +328,6 @@ stop_runtime() {
       terminate_matching_processes "reth-benchmark/data/devnet/node[0-9]*/run.sh" 2
       ;;
   esac
-  log_step "stop: runtime cleanup complete"
 }
 
 # Tear down the compose-managed Tempo devnet by project label. Not by
@@ -360,34 +359,42 @@ cleanup_benchmark_containers() {
   fi
 }
 
+# Stops what run_all started. Nodes too: a worker stopped before its activities
+# finish leaves them running. Docker containers are kept for `docker logs`; the
+# next run or `stop` removes them.
 cleanup_run_all() {
-  if [[ -n "${RUN_WORKER_PID:-}" ]] && kill -0 "$RUN_WORKER_PID" 2>/dev/null; then
-    kill -TERM "-$RUN_WORKER_PID" 2>/dev/null || true
-    kill -TERM "$RUN_WORKER_PID" 2>/dev/null || true
-    wait "$RUN_WORKER_PID" 2>/dev/null || true
-  fi
+  # shellcheck disable=SC2086 # unset PIDs drop out
+  terminate_pids 8 $RUN_STARTER_PID $RUN_WORKER_PID $RUN_TEMPORAL_PID
+  [[ "$MODE" == docker ]] || stop_nodes
+}
 
-  if [[ -n "${RUN_TEMPORAL_PID:-}" ]] && kill -0 "$RUN_TEMPORAL_PID" 2>/dev/null; then
-    kill -TERM "-$RUN_TEMPORAL_PID" 2>/dev/null || true
-    kill -TERM "$RUN_TEMPORAL_PID" 2>/dev/null || true
-    wait "$RUN_TEMPORAL_PID" 2>/dev/null || true
-  fi
+on_signal() {
+  log_step "run: SIG$1 received, stopping"
+  trap - EXIT INT TERM
+  cleanup_run_all
+  exit $((128 + $(kill -l "$1")))
 }
 
 run_all() {
-  trap cleanup_run_all EXIT INT TERM
+  trap cleanup_run_all EXIT
+  trap 'on_signal INT' INT
+  trap 'on_signal TERM' TERM
 
   log_step "run: mode=$MODE config=$CONFIG data_root=$DATA_ROOT"
-  log_step "run: step 1/5 stop existing runtime"
+  log_step "run: step 1/6 stop existing runtime"
 
   stop_runtime
 
-  log_step "run: step 2/5 prepare benchmark artifacts"
+  log_step "run: step 2/6 prepare benchmark artifacts"
   run_prepare
   log_step "run: prepare completed"
 
-  log_step "run: step 3/5 start temporal dev server"
-  start_prefixed_group "temporal" "temporal server start-dev --ip 127.0.0.1 --port 7233"
+  log_step "run: step 3/6 build worker and starter"
+  mkdir -p "$BIN_DIR"
+  go build -o "$BIN_DIR/" ./cmd/worker ./cmd/starter
+
+  log_step "run: step 4/6 start temporal dev server"
+  start_prefixed "temporal" temporal server start-dev --ip 127.0.0.1 --port 7233
   RUN_TEMPORAL_PID="$LAST_LAUNCHED_PID"
   log_step "run: temporal pid=$RUN_TEMPORAL_PID; waiting for 127.0.0.1:7233"
   if ! wait_for_tcp_port "127.0.0.1" "7233" 40; then
@@ -397,14 +404,18 @@ run_all() {
   fi
   log_step "run: temporal is ready"
 
-  log_step "run: step 4/5 start worker"
-  start_prefixed_group "worker" "go run ./cmd/worker -config '$CONFIG'"
+  log_step "run: step 5/6 start worker"
+  start_prefixed "worker" "$BIN_DIR/worker" -config "$CONFIG"
   RUN_WORKER_PID="$LAST_LAUNCHED_PID"
   log_step "run: worker pid=$RUN_WORKER_PID"
   sleep 2
 
-  log_step "run: step 5/5 start workflow starter"
-  go run ./cmd/starter -config "$CONFIG" 2>&1 | sed -u 's/^/[starter] /'
+  log_step "run: step 6/6 start workflow starter"
+  # In the background, so a signal is handled at once instead of after the
+  # starter exits. Its status becomes the run's.
+  start_prefixed "starter" "$BIN_DIR/starter" -config "$CONFIG"
+  RUN_STARTER_PID="$LAST_LAUNCHED_PID"
+  wait "$RUN_STARTER_PID"
 }
 
 run_build_evmd() {
