@@ -332,6 +332,71 @@ ALLEGRO_XTASK_BIN=/path/to/allegro-xtask go test ./internal/activities -run Alle
 The devnet-bootstrapping test skips unless that is set; the rest (launcher
 format, pool sizing, funding-vs-signer agreement) runs unconditionally.
 
+## Reth Mode
+
+Benchmarks a plain [reth](https://github.com/paradigmxyz/reth) devnet from any
+local reth binary. The validator is a `reth node --dev` that builds every block
+and validates it through the engine API. Each fullnode follows it as a trusted
+peer and through reth's debug consensus client (`--debug.rpc-consensus-url`),
+validating the same blocks as a node at the chain tip would; transactions sent
+to a fullnode reach the producer by gossip.
+
+It needs a `reth` binary and the `temporal` CLI:
+
+```bash
+scripts/run-benchmark.sh --mode reth run
+```
+
+### Reading the result
+
+Each node's stats log ends with two lines taken from its metrics, which are
+saved in full as `node_N_metrics.prom`:
+
+| line | read it as |
+|---|---|
+| `engine_summary` | payloads validated, their total `new_payload` and execution time, and execution throughput in Mgas/s |
+| `reuse_summary` | with `--engine.prewarm-reuse`: transactions committed from prewarm results (`reused`), or executed because the result was `missing` or `stale` |
+
+### Throughput
+
+Block capacity bounds the rate: one block per `reth_block_time`, which must be
+at least 1s because reth stamps each block at least a second after its parent,
+holding at most `reth_gas_limit` gas and, under Osaka (EIP-7934), about 8 MiB
+of transactions, 48,486 of these transfers. The default `config.reth.yaml`
+lifts both: one node takes a 2,000,000-transfer load with a 1e10 gas limit, a
+`genesis_patch` that leaves Osaka unscheduled (not a mainnet fork schedule),
+and eight extra transaction validation tasks, since accepting transactions is
+where the node saturates, not building blocks. On a 16-core Apple Silicon
+machine it reached 102,920 `full_second` (105,263 sustained) over 17 whole
+seconds with a `send_warning`: the pool never held more than 15% of the load,
+so that is the sender's rate and a lower bound on reth's. Blocks carried 49k to
+219k transfers and executed in 0.1-0.6 s each.
+
+### Comparing a validation change
+
+`config.reth.validation.yaml` adds a fullnode and caps blocks at 1 Ggas, 35,391
+transfers, so they are identical and full. `reth_fullnode_args` applies to
+fullnodes only, so the blocks stay the same while their validation changes,
+e.g. `["--engine.prewarm-reuse"]`. Alternate the two configs over several pairs
+and compare medians. To compare two reth builds, point `reth_bin` at each.
+
+### Workload
+
+The ERC-20 load targets a minimal token that the genesis deploys and funds for
+every sender. `hot_recipient_percent` sends that share of each sender's
+transfers to one recipient, whose balance slot they all write. At 0, the only
+conflicts are each sender's own nonce sequence.
+
+### Constraints
+
+- `validators` must be 1; add `fullnodes` to follow it.
+- Forks are active through Osaka. Amsterdam stays off: its blocks carry access
+  lists, which move reth onto a different validation path.
+- There is no docker runner.
+
+`go test ./internal/activities -run Reth` covers the generated devnet and
+needs no reth binary.
+
 ## Comparing chains
 
 Run the three examples one at a time on the same host:

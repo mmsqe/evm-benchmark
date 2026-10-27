@@ -14,6 +14,7 @@ const (
 	FamilyCosmos  = "cosmos"
 	FamilyTempo   = "tempo"
 	FamilyAllegro = "allegro"
+	FamilyReth    = "reth"
 )
 
 // ChainRuntime abstracts everything that differs between chain families:
@@ -70,6 +71,17 @@ type txProducer interface {
 	ProduceTxs(ctx context.Context, spec messages.BenchmarkSpec, target messages.NodeTarget, txPath string) (count int, err error)
 }
 
+// metricsReporter is implemented by runtimes whose nodes serve Prometheus
+// metrics: at the end of a run RunNode saves them beside the node's block stats
+// and appends their summary to the stats log.
+type metricsReporter interface {
+	// MetricsURL returns the node's Prometheus endpoint.
+	MetricsURL(spec messages.BenchmarkSpec, globalSeq int) string
+
+	// SummarizeMetrics turns a scrape of that endpoint into stats-log lines.
+	SummarizeMetrics(metrics []byte) ([]string, error)
+}
+
 // resolveRuntime returns the runtime for the spec's chain family, defaulting to
 // cosmos so existing configs keep working unchanged.
 func resolveRuntime(spec messages.BenchmarkSpec) (ChainRuntime, error) {
@@ -80,6 +92,8 @@ func resolveRuntime(spec messages.BenchmarkSpec) (ChainRuntime, error) {
 		return tempoRuntime{}, nil
 	case FamilyAllegro:
 		return allegroRuntime{}, nil
+	case FamilyReth:
+		return rethRuntime{}, nil
 	default:
 		return nil, fmt.Errorf("unknown chain_family %q", family)
 	}

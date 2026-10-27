@@ -20,7 +20,7 @@ Commands:
   run        Stop runtime + prepare + start temporal + run worker/starter
 
 Options:
-  --mode <docker|local|tempo|tempo-docker|tempo-remote|allegro>
+  --mode <docker|local|tempo|tempo-docker|tempo-remote|allegro|reth>
                           Runner mode (default: docker). "tempo" benchmarks a
                           Tempo devnet locally; "tempo-docker" runs the Tempo
                           validators as containers via docker compose (needs
@@ -29,7 +29,8 @@ Options:
                           its public RPC (Moderato by default; needs
                           TEMPO_BENCH_MNEMONIC, no tempo binaries);
                           "allegro" benchmarks an Allegro devnet locally (needs
-                          allegro and allegro-xtask).
+                          allegro and allegro-xtask); "reth" benchmarks a reth
+                          dev producer locally (needs reth).
   --config <path>         Config file path
   --data-root <path>      Root path used by benchctl gen
   --chain-config <name>   CHAIN_CONFIG value (default: evmd)
@@ -53,6 +54,8 @@ Examples:
   TEMPO_BENCH_MNEMONIC="..." scripts/run-benchmark.sh --mode tempo-remote run
 
   scripts/run-benchmark.sh --mode allegro run
+  scripts/run-benchmark.sh --mode reth run
+  scripts/run-benchmark.sh --mode reth --config examples/config.reth.validation.yaml run
 USAGE
 }
 
@@ -122,9 +125,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 case "$MODE" in
-  docker|local|tempo|tempo-docker|tempo-remote|allegro) ;;
+  docker|local|tempo|tempo-docker|tempo-remote|allegro|reth) ;;
   *)
-    echo "Invalid --mode: $MODE (expected docker, local, tempo, tempo-docker, tempo-remote or allegro)"
+    echo "Invalid --mode: $MODE (expected docker, local, tempo, tempo-docker, tempo-remote, allegro or reth)"
     exit 1
     ;;
 esac
@@ -136,6 +139,7 @@ if [[ -z "$CONFIG" ]]; then
     tempo-docker) CONFIG="./examples/config.tempo.docker.yaml" ;;
     tempo-remote) CONFIG="./examples/config.tempo.moderato.yaml" ;;
     allegro) CONFIG="./examples/config.allegro.yaml" ;;
+    reth)   CONFIG="./examples/config.reth.yaml" ;;
     *)      CONFIG="./examples/config.local.yaml" ;;
   esac
 fi
@@ -148,13 +152,14 @@ if [[ -z "$DATA_ROOT" ]]; then
     tempo-docker) DATA_ROOT="$HOME/tempo-benchmark-docker/data" ;;
     tempo-remote) DATA_ROOT="/tmp/tempo-remote-benchmark/data" ;;
     allegro) DATA_ROOT="/tmp/allegro-benchmark/data" ;;
+    reth)   DATA_ROOT="/tmp/reth-benchmark/data" ;;
     *)      DATA_ROOT="/private/tmp/evm-benchmark-local/data" ;;
   esac
 fi
 
 # Chain profiles are cosmos-only; exporting one would override the tempo /
-# allegro config.
-if [[ "$MODE" == tempo* || "$MODE" == allegro ]]; then
+# allegro / reth config.
+if [[ "$MODE" == tempo* || "$MODE" == allegro || "$MODE" == reth ]]; then
   unset CHAIN_CONFIG
 else
   export CHAIN_CONFIG
@@ -240,6 +245,7 @@ run_clean() {
     tempo-docker) rm -rf "$HOME/tempo-benchmark-docker" ;;
     tempo-remote) rm -rf /tmp/tempo-remote-benchmark ;;
     allegro) rm -rf /tmp/allegro-benchmark ;;
+    reth) rm -rf /tmp/reth-benchmark ;;
   esac
 }
 
@@ -315,6 +321,12 @@ stop_runtime() {
     # so the data dir never reaches the command line; match the launched
     # command instead.
     allegro) terminate_matching_processes "allegro node --chain" 8 ;;
+    # Same for reth; a fullnode's launcher may still be waiting for the
+    # producer, so stop those shells too.
+    reth)
+      terminate_matching_processes "reth node --chain ./genesis.json --datadir ." 8
+      terminate_matching_processes "reth-benchmark/data/devnet/node[0-9]*/run.sh" 2
+      ;;
   esac
   log_step "stop: runtime cleanup complete"
 }

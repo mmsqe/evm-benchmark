@@ -1,0 +1,58 @@
+# reth validation A/B, local runner: a `reth node --dev` producer and one
+# fullnode following it, so a validation change can be compared on identical,
+# full blocks. See "Reth Mode" in the README; config.reth.yaml is the
+# throughput default.
+#
+#   scripts/run-benchmark.sh --mode reth --config examples/config.reth.validation.yaml run
+temporal:
+  host_port: 127.0.0.1:7233
+  namespace: default
+  task_queue: EVM_BENCHMARK_TASK_QUEUE
+
+start:
+  workflow_id: reth-benchmark-sample
+
+benchmark:
+  data_dir: /tmp/reth-benchmark/data
+  out_dir: /tmp/reth-benchmark/output
+
+  chain_family: reth
+  runner_type: local
+
+  # Resolved from PATH, or an absolute path (~ / $VAR allowed) to a local build.
+  reth_bin: reth
+  # 5 ports per node: node0 serves JSON-RPC on 9502, node1 on 9507.
+  reth_base_port: 9500
+  # Caps a block at ~35k of these transfers, so every block is full.
+  reth_gas_limit: 1000000000
+  reth_block_time: 1s
+
+  # Fullnode-only flags, e.g. ["--engine.prewarm-reuse"].
+  reth_fullnode_args: []
+
+  evm_chain_id: 1337
+  base_mnemonic: "test test test test test test test test test test test junk"
+
+  tx_type: erc20-transfer
+  erc20_transfer_gas: 60000
+  # This share of each sender's transfers writes one balance slot.
+  hot_recipient_percent: 30
+  gas_price_wei: 10000000000
+
+  # 2 nodes x 2,000 x 100 = 400,000.
+  validators: 1
+  fullnodes: 1
+  num_accounts: 2000
+  num_txs: 100
+  num_idle: 10
+  broadcast_concurrency: 32
+  broadcast_batch_size: 100
+  broadcast_pending_watermark: -1
+
+  start_node: true
+  skip_generate_layout: false
+  pre_generate_txs: true
+  run_nodes: true
+  validator_generate_load: true
+  patch_image:
+    enabled: false

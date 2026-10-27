@@ -116,6 +116,24 @@ type BenchmarkSpec struct {
 	// e.g. ["--builder.interval", "200ms"].
 	AllegroNodeArgs []string `yaml:"allegro_node_args"`
 
+	// Reth-family settings (chain_family: reth); see "Reth Mode" in the README.
+	RethBin string `yaml:"reth_bin"`
+	// Base of each node's 5-port block (p2p, authrpc, http, ws, metrics).
+	RethBasePort int `yaml:"reth_base_port"`
+	// Per-block gas budget for genesis and the builder; 0 keeps a 30M genesis
+	// limit and reth's own builder target.
+	RethGasLimit int64 `yaml:"reth_gas_limit"`
+	// Dev block interval in Go duration syntax, at least 1s; default 1s.
+	RethBlockTime string `yaml:"reth_block_time"`
+	// Extra flags for every `reth node` launcher.
+	RethNodeArgs []string `yaml:"reth_node_args"`
+	// Extra flags for fullnode launchers only, after reth_node_args.
+	RethFullnodeArgs []string `yaml:"reth_fullnode_args"`
+
+	// Percentage (0-100) of each account's transactions the shared signer sends
+	// to bench.HotRecipient instead of back to the sender.
+	HotRecipientPercent int `yaml:"hot_recipient_percent"`
+
 	MinReadyHeight          int64 `yaml:"min_ready_height"`
 	PeerReadyTimeoutSeconds int   `yaml:"peer_ready_timeout_seconds"`
 	PreGenerateTxs          bool  `yaml:"pre_generate_txs"`

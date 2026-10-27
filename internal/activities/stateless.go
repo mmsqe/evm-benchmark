@@ -641,6 +641,9 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 
 	spec.BroadcastConcurrency = broadcastConcurrency
 	res, err := doRun(ctx, client, spec, target, rpcURL, txs)
+	if reporter, ok := chain.(metricsReporter); ok && err == nil && spec.StartNode {
+		err = reportNodeMetrics(ctx, client, reporter, spec, target, res.StatsFile)
+	}
 	if err != nil && ctx.Err() != nil && context.Cause(ctx) != ctx.Err() {
 		err = fmt.Errorf("%w: %w", err, context.Cause(ctx))
 	}
@@ -880,6 +883,69 @@ func doRun(
 		TopTPSDetails: topTPSDetails,
 		StatsFile:     statsPath,
 	}, nil
+}
+
+// reportNodeMetrics saves the node's metrics as metrics.prom beside its stats
+// log and appends their summary to the log, refreshing both copies in out_dir.
+// RunNode calls it before stopping the node, so the scrape covers the run.
+func reportNodeMetrics(
+	ctx context.Context,
+	client *http.Client,
+	reporter metricsReporter,
+	spec messages.BenchmarkSpec,
+	target messages.NodeTarget,
+	statsPath string,
+) error {
+	metricsURL := reporter.MetricsURL(spec, target.GlobalSeq)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metricsURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("scrape metrics %s: %w", metricsURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("scrape metrics %s: %s", metricsURL, resp.Status)
+	}
+	metrics, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("scrape metrics %s: %w", metricsURL, err)
+	}
+	lines, err := reporter.SummarizeMetrics(metrics)
+	if err != nil {
+		return err
+	}
+	for _, line := range lines {
+		activity.GetLogger(ctx).Info(line, "node", target.GlobalSeq)
+	}
+
+	metricsPath := filepath.Join(filepath.Dir(statsPath), "metrics.prom")
+	if err := os.WriteFile(metricsPath, metrics, 0o644); err != nil {
+		return fmt.Errorf("write metrics: %w", err)
+	}
+	statsFile, err := os.OpenFile(statsPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open stats log: %w", err)
+	}
+	_, err = statsFile.WriteString(strings.Join(lines, "\n") + "\n")
+	if closeErr := statsFile.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("append metrics summary: %w", err)
+	}
+
+	if spec.OutDir == "" {
+		return nil
+	}
+	for src, name := range map[string]string{statsPath: "block_stats.log", metricsPath: "metrics.prom"} {
+		if err := copyFile(src, filepath.Join(spec.OutDir, fmt.Sprintf("node_%d_%s", target.GlobalSeq, name))); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeJSON(path string, value interface{}) error {

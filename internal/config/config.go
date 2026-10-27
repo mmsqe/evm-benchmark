@@ -97,6 +97,7 @@ func expandSpecPaths(spec *messages.BenchmarkSpec) {
 	spec.TempoXtaskBin = expandPath(spec.TempoXtaskBin)
 	spec.AllegroBin = expandPath(spec.AllegroBin)
 	spec.AllegroXtaskBin = expandPath(spec.AllegroXtaskBin)
+	spec.RethBin = expandPath(spec.RethBin)
 	spec.ChainsConfigPath = expandPath(spec.ChainsConfigPath)
 	spec.PatchImage.SourceDir = expandPath(spec.PatchImage.SourceDir)
 	// Not paths, but read from the environment too, so a public-network config
@@ -355,6 +356,9 @@ func validate(cfg AppConfig, runtimeValidation bool) error {
 	if cfg.Benchmark.RunnerType != "local" && cfg.Benchmark.RunnerType != "docker" {
 		return fmt.Errorf("benchmark.runner_type must be \"local\" or \"docker\"")
 	}
+	if err := validateHotRecipient(cfg.Benchmark); err != nil {
+		return err
+	}
 	if err := validateRemote(cfg.Benchmark); err != nil {
 		return err
 	}
@@ -373,6 +377,20 @@ func validate(cfg AppConfig, runtimeValidation bool) error {
 		if cfg.Benchmark.RunnerType == "docker" && cfg.Benchmark.PatchImage.FromImage == "" && cfg.Benchmark.DockerImage == "" {
 			return fmt.Errorf("benchmark.patch_image.enabled requires benchmark.patch_image.from_image or benchmark.docker_image")
 		}
+	}
+	return nil
+}
+
+// validateHotRecipient rejects a hot_recipient_percent the shared signer cannot
+// apply. Tempo's native generator signs its own shapes and would ignore it, so
+// a contended run there is tempo_tx_shape: hot instead.
+func validateHotRecipient(spec messages.BenchmarkSpec) error {
+	if spec.HotRecipientPercent < 0 || spec.HotRecipientPercent > 100 {
+		return fmt.Errorf("benchmark.hot_recipient_percent must be between 0 and 100 (got %d)", spec.HotRecipientPercent)
+	}
+	if spec.HotRecipientPercent > 0 && spec.ChainFamily == "tempo" && !spec.TempoLegacyTxs {
+		return fmt.Errorf("benchmark.hot_recipient_percent applies to the shared legacy signer; " +
+			"tempo's native transactions use tempo_tx_shape: hot")
 	}
 	return nil
 }

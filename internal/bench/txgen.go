@@ -17,6 +17,10 @@ const (
 	SigningWorkerCap        = 8
 )
 
+// HotRecipient receives the hot_recipient_percent share of every account's
+// transfers. No key controls it, so it only ever accumulates.
+var HotRecipient = common.HexToAddress("0x1111111111111111111111111111111111111111")
+
 func SigningWorkerCount(totalAccounts int) int {
 	if totalAccounts <= 0 {
 		return 0
@@ -161,16 +165,29 @@ func signAccountTxs(spec messages.BenchmarkSpec, globalSeq, accountIndex int, ch
 }
 
 func makeTx(spec messages.BenchmarkSpec, from common.Address, nonce uint64, gasPrice *big.Int) (*types.Transaction, error) {
+	to := from
+	if sendsToHotRecipient(spec.HotRecipientPercent, nonce) {
+		to = HotRecipient
+	}
 	switch spec.TxType {
 	case messages.SimpleTransferTx:
-		return types.NewTransaction(nonce, from, big.NewInt(1), spec.SimpleTransferGas, gasPrice, nil), nil
+		return types.NewTransaction(nonce, to, big.NewInt(1), spec.SimpleTransferGas, gasPrice, nil), nil
 	case messages.ERC20TransferTx:
 		contract := common.HexToAddress(spec.ERC20ContractAddress)
-		data := buildERC20TransferData(from, big.NewInt(1))
+		data := buildERC20TransferData(to, big.NewInt(1))
 		return types.NewTransaction(nonce, contract, big.NewInt(0), spec.ERC20TransferGas, gasPrice, data), nil
 	default:
 		return nil, fmt.Errorf("unsupported tx type: %s", spec.TxType)
 	}
+}
+
+// sendsToHotRecipient reports whether an account's transaction at nonce goes to
+// HotRecipient. The hot nonces are spread evenly through the sequence, rather
+// than the first percent of it, so every block of a run carries the same share
+// of contended transactions.
+func sendsToHotRecipient(percent int, nonce uint64) bool {
+	p := uint64(percent)
+	return (nonce+1)*p/100 > nonce*p/100
 }
 
 func buildERC20TransferData(to common.Address, amount *big.Int) []byte {
