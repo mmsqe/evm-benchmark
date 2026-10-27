@@ -91,10 +91,10 @@ benchmark:
   fullnodes: 0
   num_accounts: 2000
   # num_txs: 100
-  # 500,000 total: at this chain's rate a smaller load drains in a few seconds
-  # and the run is bounded by the load rather than the chain. evmd uses a
-  # smaller one; see "Comparing chains" in the README.
-  num_txs: 250
+  # 2,000,000 total, about 20 whole seconds at this chain's rate: 500,000
+  # drained in 6, too few seconds to average out block-to-block jitter. evmd
+  # uses a smaller one; see "Comparing chains" in the README.
+  num_txs: 1000
   num_idle: 40
   broadcast_concurrency: 32
   broadcast_batch_size: 100

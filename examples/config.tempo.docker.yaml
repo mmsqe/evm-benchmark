@@ -86,7 +86,9 @@ benchmark:
   # so genesis funds validators * num_accounts + 1 accounts (index 0 is the
   # validator key).
   num_accounts: 500
-  num_txs: 100
+  # 4 nodes x 500 x 1,000 = 2,000,000 in all, the load config.tempo.yaml sends,
+  # so the run lasts long enough to average out block-to-block jitter.
+  num_txs: 1000
   num_idle: 40
   broadcast_concurrency: 32
   # Transactions per JSON-RPC request; one round trip each caps the sender
