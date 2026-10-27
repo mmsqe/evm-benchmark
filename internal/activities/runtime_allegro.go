@@ -42,7 +42,7 @@ var allegroPorts = portBlock{
 //
 // Prerequisites (documented, not vendored): the `allegro` and `allegro-xtask`
 // binaries from the allegro repo.
-type allegroRuntime struct{}
+type allegroRuntime struct{ devnetRuntime }
 
 func (allegroRuntime) Name() string { return FamilyAllegro }
 
@@ -97,28 +97,13 @@ func (allegroRuntime) Validate(spec messages.BenchmarkSpec) error {
 	return nil
 }
 
-// PreStartCheck refuses to launch when the node's RPC port is already served,
-// which would otherwise mean benchmarking a leftover node's stale genesis.
 func (a allegroRuntime) PreStartCheck(spec messages.BenchmarkSpec, target messages.NodeTarget) error {
-	if !spec.StartNode {
-		return nil // an externally managed node is expected to be listening
-	}
-	return assertRPCPortsFree(a, spec, []messages.NodeTarget{target})
+	return devnetPreStartCheck(a, spec, target)
 }
-
-// HasConsensusRPC reports false: Allegro exposes no CometBFT-style RPC, so node
-// readiness is determined from the EVM JSON-RPC port alone.
-func (allegroRuntime) HasConsensusRPC() bool { return false }
 
 // EVMRPCPort returns the node's HTTP JSON-RPC port from its port block.
 func (allegroRuntime) EVMRPCPort(spec messages.BenchmarkSpec, globalSeq int) int {
 	return allegroPorts.rpc(spec.AllegroBasePort, globalSeq)
-}
-
-// LocalStartCommand runs the launcher generated for the node (see
-// allegroRunScript). The node home doubles as the reth datadir (`--datadir .`).
-func (allegroRuntime) LocalStartCommand(spec messages.BenchmarkSpec, target messages.NodeTarget) ([]string, string) {
-	return devnetLaunchCommand(spec, target)
 }
 
 // allegroBasePort returns the base of a node's 4-port block.

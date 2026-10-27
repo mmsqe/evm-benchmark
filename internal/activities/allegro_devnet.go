@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 )
 
@@ -25,13 +23,6 @@ import (
 // 1..num_accounts, so the alloc patch below is what makes any load land: without
 // it every transaction beyond the first 19 of node 0 comes from an account with
 // a zero balance.
-
-const (
-	// allegroAccountBalance funds every benchmark account with the same 10,000
-	// ETH allegro-xtask gives its own prefunded accounts. alloy serialises
-	// genesis balances as hex quantities.
-	allegroAccountBalance = "0x21e19e0c9bab2400000"
-)
 
 // generateAllegroDevnet materialises an Allegro devnet under spec.DataDir/devnet:
 // a shared genesis.json plus one directory per node holding its own copy of the
@@ -64,20 +55,10 @@ func generateAllegroDevnet(ctx context.Context, spec messages.BenchmarkSpec, nod
 	}
 
 	nodeBin := cmp.Or(spec.AllegroBin, allegroDefaultNodeBin)
-	for _, node := range nodes {
-		nodeDir := devnetNodeHome(spec, node.GlobalSeq)
-		if err := os.MkdirAll(nodeDir, 0o755); err != nil {
-			return fmt.Errorf("create node dir %s: %w", nodeDir, err)
-		}
-		if err := os.WriteFile(filepath.Join(nodeDir, "genesis.json"), genesisBytes, 0o644); err != nil {
-			return fmt.Errorf("copy genesis to %s: %w", nodeDir, err)
-		}
+	return writeDevnetNodes(spec, nodes, genesisBytes, func(node messages.NodeTarget) (runScript, error) {
 		args := allegroNodeArgs(spec, node.GlobalSeq, allegroBasePort(spec, node.GlobalSeq))
-		if err := allegroRunScript(nodeBin, args).write(nodeDir); err != nil {
-			return err
-		}
-	}
-	return nil
+		return allegroRunScript(nodeBin, args), nil
+	})
 }
 
 // allegroValidatorSockets lists each node's consensus p2p socket, in node-index
@@ -121,24 +102,16 @@ func allegroGenesisPatch(spec messages.BenchmarkSpec, nodes []messages.NodeTarge
 	return deepMergeJSON(patch, spec.GenesisPatch), nil
 }
 
-// allegroFundedAlloc derives the genesis alloc entry for every account the load
-// generator will sign from. Keys use the same derivation as internal/bench, so
-// an account funded here is an account that can pay.
+// allegroFundedAlloc is the genesis alloc entry for every account the load
+// signs from.
 func allegroFundedAlloc(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) (map[string]interface{}, error) {
-	alloc := make(map[string]interface{}, len(nodes)*spec.NumAccounts)
-	for _, node := range nodes {
-		// Mirrors bench.signAccountTxs: account i signs with index i+1, so
-		// index 0 is never used for load.
-		for i := 1; i <= spec.NumAccounts; i++ {
-			key, err := keygen.DeterministicKey(node.GlobalSeq, i, spec.BaseMnemonic)
-			if err != nil {
-				return nil, fmt.Errorf("derive account %d for node %d: %w", i, node.GlobalSeq, err)
-			}
-			addr := crypto.PubkeyToAddress(key.PublicKey)
-			// Lowercase: allegro-xtask writes its own entries that way, so a
-			// shared account merges into one entry instead of two.
-			alloc[strings.ToLower(addr.Hex())] = map[string]interface{}{"balance": allegroAccountBalance}
-		}
+	addrs, err := signerAddresses(spec, nodes)
+	if err != nil {
+		return nil, err
+	}
+	alloc := make(map[string]interface{}, len(addrs))
+	for _, addr := range addrs {
+		alloc[allocKey(addr)] = map[string]interface{}{"balance": devnetAccountBalance}
 	}
 	return alloc, nil
 }

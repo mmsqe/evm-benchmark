@@ -68,7 +68,7 @@ var tempoShapeMinGas = map[string]uint64{
 //
 // Prerequisites (documented, not vendored): the `tempo` and `tempo-xtask`
 // binaries from the tempo repo.
-type tempoRuntime struct{}
+type tempoRuntime struct{ devnetRuntime }
 
 func (tempoRuntime) Name() string { return FamilyTempo }
 
@@ -216,30 +216,13 @@ func (tempoRuntime) Validate(spec messages.BenchmarkSpec) error {
 	return nil
 }
 
-// PreStartCheck refuses to launch when the node's RPC port is already served,
-// which would otherwise mean benchmarking a leftover node's stale genesis.
 func (t tempoRuntime) PreStartCheck(spec messages.BenchmarkSpec, target messages.NodeTarget) error {
-	if !spec.StartNode || spec.RunnerType == "docker" {
-		// An externally managed node — including a compose-managed container —
-		// is expected to already be listening.
-		return nil
-	}
-	return assertRPCPortsFree(t, spec, []messages.NodeTarget{target})
+	return devnetPreStartCheck(t, spec, target)
 }
-
-// HasConsensusRPC reports false: Tempo exposes no CometBFT-style RPC, so node
-// readiness is determined from the EVM JSON-RPC port alone.
-func (tempoRuntime) HasConsensusRPC() bool { return false }
 
 // EVMRPCPort returns the node's HTTP JSON-RPC port from its port block.
 func (tempoRuntime) EVMRPCPort(spec messages.BenchmarkSpec, globalSeq int) int {
 	return tempoPorts.rpc(spec.TempoBasePort, globalSeq)
-}
-
-// LocalStartCommand runs the launcher generated for the node (see
-// tempoRunScript).
-func (tempoRuntime) LocalStartCommand(spec messages.BenchmarkSpec, target messages.NodeTarget) ([]string, string) {
-	return devnetLaunchCommand(spec, target)
 }
 
 // tempoBasePort returns the base of a node's 6-port block.

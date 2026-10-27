@@ -11,13 +11,46 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 )
 
 // Plumbing shared by the families that generate their own network under
 // <data_dir>/devnet rather than driving a chain binary's init/genesis commands
-// (tempo, allegro). They differ in what goes into a node home and how peers are
-// wired; the layout, port block, genesis patch and launcher format are the same.
+// (tempo, allegro, reth). They differ in what goes into a node home and how
+// peers are wired; the layout, port block, genesis patch, signer funding and
+// launcher format are the same.
+
+// devnetRuntime is the ChainRuntime behaviour every such family shares; each
+// embeds it and adds what differs.
+type devnetRuntime struct{}
+
+// HasConsensusRPC reports false: these nodes expose no CometBFT-style RPC, so
+// readiness is determined from the EVM JSON-RPC port alone.
+func (devnetRuntime) HasConsensusRPC() bool { return false }
+
+// LocalStartCommand runs the launcher generated for the node.
+func (devnetRuntime) LocalStartCommand(spec messages.BenchmarkSpec, target messages.NodeTarget) ([]string, string) {
+	return devnetLaunchCommand(spec, target)
+}
+
+// rpcPorter is the part of ChainRuntime the port checks below need.
+type rpcPorter interface {
+	EVMRPCPort(spec messages.BenchmarkSpec, globalSeq int) int
+}
+
+// devnetPreStartCheck refuses to launch when the node's RPC port is already
+// served, which would otherwise mean benchmarking a leftover node's stale
+// genesis. An externally managed node, including a compose-managed container,
+// is expected to be listening already.
+func devnetPreStartCheck(chain rpcPorter, spec messages.BenchmarkSpec, target messages.NodeTarget) error {
+	if !spec.StartNode || spec.RunnerType == "docker" {
+		return nil
+	}
+	return assertRPCPortsFree(chain, spec, []messages.NodeTarget{target})
+}
 
 // devnetDir is the root of a generated network.
 func devnetDir(spec messages.BenchmarkSpec) string {
@@ -53,6 +86,61 @@ func devnetLaunchCommand(spec messages.BenchmarkSpec, target messages.NodeTarget
 	return []string{filepath.Join(home, "run.sh")}, home
 }
 
+// writeDevnetNodes writes each node's home with the shared genesis and the
+// launcher returned for it. The home doubles as the node's datadir.
+func writeDevnetNodes(
+	spec messages.BenchmarkSpec,
+	nodes []messages.NodeTarget,
+	genesis []byte,
+	launcher func(messages.NodeTarget) (runScript, error),
+) error {
+	for _, node := range nodes {
+		nodeDir := devnetNodeHome(spec, node.GlobalSeq)
+		if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+			return fmt.Errorf("create node dir %s: %w", nodeDir, err)
+		}
+		if err := os.WriteFile(filepath.Join(nodeDir, "genesis.json"), genesis, 0o644); err != nil {
+			return fmt.Errorf("write genesis to %s: %w", nodeDir, err)
+		}
+		script, err := launcher(node)
+		if err != nil {
+			return err
+		}
+		if err := script.write(nodeDir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// devnetAccountBalance funds each signer account with 10,000 ETH, as
+// allegro-xtask funds its own accounts, in the hex quantity alloc entries use.
+const devnetAccountBalance = "0x21e19e0c9bab2400000"
+
+// signerAddresses returns, for every node, the addresses the shared signer
+// sends from: bench.signAccountTxs signs account i with key index i+1, so index
+// 0 is never used for load. An address funded from this list is one that can
+// pay.
+func signerAddresses(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) ([]common.Address, error) {
+	addrs := make([]common.Address, 0, len(nodes)*spec.NumAccounts)
+	for _, node := range nodes {
+		for i := 1; i <= spec.NumAccounts; i++ {
+			key, err := keygen.DeterministicKey(node.GlobalSeq, i, spec.BaseMnemonic)
+			if err != nil {
+				return nil, fmt.Errorf("derive account %d for node %d: %w", i, node.GlobalSeq, err)
+			}
+			addrs = append(addrs, crypto.PubkeyToAddress(key.PublicKey))
+		}
+	}
+	return addrs, nil
+}
+
+// allocKey spells an address the way genesis generators write alloc entries,
+// lowercase, so an account one already funded merges into a single entry.
+func allocKey(addr common.Address) string {
+	return strings.ToLower(addr.Hex())
+}
+
 // portBlock is a family's fixed per-node port allocation: node N's ports start
 // at base + N*size, with EVM JSON-RPC at rpcOffset inside the block. Declaring
 // one per family keeps "where does node 2 serve JSON-RPC" to a single answer.
@@ -79,7 +167,7 @@ func (b portBlock) rpc(specBase, globalSeq int) int {
 // already served: a node left over from an earlier run keeps serving its own
 // (stale) genesis, and the load would silently measure that chain instead of
 // the one generated here.
-func assertRPCPortsFree(chain ChainRuntime, spec messages.BenchmarkSpec, nodes []messages.NodeTarget) error {
+func assertRPCPortsFree(chain rpcPorter, spec messages.BenchmarkSpec, nodes []messages.NodeTarget) error {
 	for _, node := range nodes {
 		if err := assertPortFree(chain.EVMRPCPort(spec, node.GlobalSeq)); err != nil {
 			return err
