@@ -33,6 +33,9 @@ base {
       '8',
       '--txpool.max-batch-size',
       '64',
+      // Reth builds whose reuse still predicts the beneficiary execute ~16x
+      // slower with this.
+      '--engine.prewarm-reuse',
       // '--rpc.batch-concurrency',
       // '128',
     ],
@@ -42,7 +45,8 @@ base {
 
     // Uncontended, like tempo's default shape.
     tx_type: 'erc20-transfer',
-    erc20_transfer_gas: 60000,
+    // A transfer uses ~26k; reth reuses prewarm results only from a 100k limit.
+    erc20_transfer_gas: 100000,
     hot_recipient_percent: 0,
     gas_price_wei: 10000000000,
 
