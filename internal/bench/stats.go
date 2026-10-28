@@ -22,8 +22,9 @@ type blockPoint struct {
 // tpsBucket is one wall-clock second of block production.
 type tpsBucket struct {
 	At   time.Time
-	Head int64 // highest block height stamped with this second
+	Head int64 // highest block height stamped with this second, 0 if none was
 	Txs  int
+	Rate float64 // Txs over the seconds until the next block, see bucketTPS
 }
 
 // bucketTPS groups blocks into whole-second buckets by block timestamp.
@@ -40,8 +41,8 @@ type tpsBucket struct {
 //
 // Buckets cover the active window only — the first through last second that
 // carried transactions — so the empty blocks before the load and the idle tail
-// after it do not dilute the rate. Idle seconds *inside* that window are kept:
-// they are real stalls.
+// after it do not dilute the rate. Every second *inside* that window is kept,
+// with or without a block: an idle second there is a real stall.
 func bucketTPS(points []blockPoint) []tpsBucket {
 	first, last := -1, -1
 	for i, p := range points {
@@ -56,19 +57,34 @@ func bucketTPS(points []blockPoint) []tpsBucket {
 		return nil
 	}
 
-	buckets := make([]tpsBucket, 0, 16)
-	index := make(map[int64]int, 16)
+	// Block timestamps never decrease, so the first and last loaded blocks bound
+	// the window.
+	start := points[first].At.Unix()
+	buckets := make([]tpsBucket, points[last].At.Unix()-start+1)
+	for i := range buckets {
+		buckets[i].At = time.Unix(start+int64(i), 0)
+	}
 	for _, p := range points[first : last+1] {
-		key := p.At.Unix()
-		i, ok := index[key]
-		if !ok {
-			buckets = append(buckets, tpsBucket{At: p.At})
-			i = len(buckets) - 1
-			index[key] = i
+		b := &buckets[p.At.Unix()-start]
+		b.Txs += p.Txs
+		b.Head = max(b.Head, p.Height)
+	}
+
+	// A block is built until the next one, so its second's rate spreads the
+	// transactions over the seconds until the next block. At a block per second
+	// or faster, that is the second's own count.
+	end := points[last].At.Unix()
+	next := end + 1
+	for _, p := range points[last+1:] {
+		if s := p.At.Unix(); s > end {
+			next = s
+			break
 		}
-		buckets[i].Txs += p.Txs
-		if p.Height > buckets[i].Head {
-			buckets[i].Head = p.Height
+	}
+	for i := len(buckets) - 1; i >= 0; i-- {
+		if b := &buckets[i]; b.Head > 0 {
+			b.Rate = float64(b.Txs) / float64(next-b.At.Unix())
+			next = b.At.Unix()
 		}
 	}
 	return buckets
@@ -283,13 +299,12 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 		}
 	}
 
-	// Rates are per whole second (see bucketTPS); a block's reported rate is
-	// the rate of the second it landed in, so the column stays consistent with
-	// the summary instead of being a window that may not span a second at all.
+	// A block's reported rate is that of the second it landed in (see
+	// bucketTPS), so the column stays consistent with the peaks below.
 	buckets := bucketTPS(points)
 	rateBySecond := make(map[int64]float64, len(buckets))
 	for _, b := range buckets {
-		rateBySecond[b.At.Unix()] = float64(b.Txs)
+		rateBySecond[b.At.Unix()] = b.Rate
 	}
 	for i, p := range points {
 		points[i].TPS = rateBySecond[p.At.Unix()]
@@ -325,14 +340,17 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 			stats.FullSeconds, stats.ActiveSeconds, txsSent, tpsMinFullSeconds)
 	}
 
-	sort.Slice(buckets, func(i, j int) bool { return buckets[i].Txs > buckets[j].Txs })
+	sort.Slice(buckets, func(i, j int) bool { return buckets[i].Rate > buckets[j].Rate })
 	top := min(len(buckets), 5)
 	stats.Peaks = make([]blockPoint, 0, top)
 	for i := 0; i < top; i++ {
 		b := buckets[i]
+		if b.Rate == 0 {
+			break // a second without transactions is no peak
+		}
 		_, _ = fmt.Fprintf(out, "top_tps rank=%d height=%d time=%s txs=%d tps=%.2f\n",
-			i+1, b.Head, b.At.UTC().Format(time.RFC3339Nano), b.Txs, float64(b.Txs))
-		stats.Peaks = append(stats.Peaks, blockPoint{Height: b.Head, Txs: b.Txs, At: b.At, TPS: float64(b.Txs)})
+			i+1, b.Head, b.At.UTC().Format(time.RFC3339Nano), b.Txs, b.Rate)
+		stats.Peaks = append(stats.Peaks, blockPoint{Height: b.Head, Txs: b.Txs, At: b.At, TPS: b.Rate})
 	}
 
 	return stats, nil

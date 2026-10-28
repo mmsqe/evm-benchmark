@@ -49,8 +49,8 @@ func TestBucketTPSIsBlockRateIndependent(t *testing.T) {
 			}
 			const want = 24000
 			for _, b := range buckets {
-				if b.Txs != want {
-					t.Errorf("second %s = %d tx/s, want %d", b.At, b.Txs, want)
+				if b.Txs != want || b.Rate != want {
+					t.Errorf("second %s = %d txs at %.0f tx/s, want %d", b.At, b.Txs, b.Rate, want)
 				}
 			}
 			if got := sustainedTPS(buckets); got != want {
@@ -113,6 +113,37 @@ func TestBucketTPSKeepsInteriorStalls(t *testing.T) {
 	}
 	if got := medianTPS(buckets); got != 1800 {
 		t.Errorf("median of {0, 1800, 1800} = %.0f, want 1800", got)
+	}
+}
+
+// TestBucketTPSCountsSecondsWithoutBlocks is the reth regression: full blocks
+// ~18 s apart each counted as one second, so a run doing ~22k tx/s reported
+// 384,998, in its averages and its peaks.
+func TestBucketTPSCountsSecondsWithoutBlocks(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	var points []blockPoint
+	for i, txs := range []int{100, 300, 300, 100, 0} { // then an idle block
+		points = append(points, blocksAt(int64(i+1), base.Add(time.Duration(3*i)*time.Second), 1, txs)...)
+	}
+
+	buckets := bucketTPS(points)
+	if len(buckets) != 10 {
+		t.Fatalf("active seconds = %d, want 10 (blocks 3 s apart over 9 s)", len(buckets))
+	}
+	if b := buckets[1]; b.Txs != 0 || b.Head != 0 || !b.At.Equal(base.Add(time.Second)) {
+		t.Errorf("second without a block = %+v, want an empty bucket at %s", b, base.Add(time.Second))
+	}
+	if got := sustainedTPS(buckets); got != 80 {
+		t.Errorf("sustained = %.0f, want 80 (800 txs over 10 seconds)", got)
+	}
+	if got := fullSecondTPS(buckets); got != 75 {
+		t.Errorf("full_second = %.0f, want 75 (600 txs over 8 interior seconds)", got)
+	}
+	// Each block's second spreads its transactions until the next block.
+	for i, want := range map[int]float64{0: 100.0 / 3, 1: 0, 3: 100, 9: 100.0 / 3} {
+		if got := buckets[i].Rate; got != want {
+			t.Errorf("second %d rate = %.2f, want %.2f", i, got, want)
+		}
 	}
 }
 
