@@ -602,7 +602,7 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 					return messages.NodeRunResult{}, fmt.Errorf("wait consensus rpc: %w (docker logs: %s)", err, logPath)
 				}
 			}
-			return messages.NodeRunResult{}, fmt.Errorf("wait consensus rpc: %w", err)
+			return messages.NodeRunResult{}, withCause(ctx, fmt.Errorf("wait consensus rpc: %w", err))
 		}
 	}
 	// A remote endpoint has no local port; doRun's ready-height check covers it.
@@ -613,7 +613,7 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 					return messages.NodeRunResult{}, fmt.Errorf("wait evm rpc: %w (docker logs: %s)", err, logPath)
 				}
 			}
-			return messages.NodeRunResult{}, fmt.Errorf("wait evm rpc: %w", err)
+			return messages.NodeRunResult{}, withCause(ctx, fmt.Errorf("wait evm rpc: %w", err))
 		}
 	}
 
@@ -640,10 +640,16 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 	if reporter, ok := chain.(metricsReporter); ok && err == nil && spec.StartNode {
 		err = reportNodeMetrics(ctx, client, reporter, spec, target, res.StatsFile)
 	}
-	if err != nil && ctx.Err() != nil && context.Cause(ctx) != ctx.Err() {
-		err = fmt.Errorf("%w: %w", err, context.Cause(ctx))
+	return res, withCause(ctx, err)
+}
+
+// withCause appends to err why ctx was canceled, such as the node's exit and the
+// end of its log. A live context, or one canceled without a cause, adds nothing.
+func withCause(ctx context.Context, err error) error {
+	if cause := context.Cause(ctx); err != nil && cause != ctx.Err() {
+		return fmt.Errorf("%w: %w", err, cause)
 	}
-	return res, err
+	return err
 }
 
 func doRun(
