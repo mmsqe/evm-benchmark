@@ -21,12 +21,21 @@ base {
     reth_bin: 'reth',
     // 5 ports per node: node0 serves JSON-RPC on 9502, node1 on 9507.
     reth_base_port: 9500,
-    // No block fills this; Osaka's size cap is lifted below.
+    // Full at ~385k of these transfers once intake keeps up; Osaka's size cap is
+    // lifted below. A full block takes ~2.8 s to build and validate, so a larger
+    // limit does not raise the rate.
     reth_gas_limit: 10000000000,
     reth_block_time: '1s',
 
-    // Transaction intake, not block building, is where the node saturates.
-    reth_node_args: ['--txpool.additional-validation-tasks', '8'],
+    // Transaction intake is where the node saturates, so insert into pool in batches.
+    reth_node_args: [
+      '--txpool.additional-validation-tasks',
+      '8',
+      '--txpool.max-batch-size',
+      '64',
+      // '--rpc.batch-concurrency',
+      // '128',
+    ],
 
     evm_chain_id: 1337,
     base_mnemonic: 'test test test test test test test test test test test junk',
