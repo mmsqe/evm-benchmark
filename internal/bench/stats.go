@@ -138,6 +138,13 @@ func medianTPS(buckets []tpsBucket) float64 {
 	return float64(rates[len(rates)/2])
 }
 
+// drainBuckets keeps the whole seconds after sendEnd, see [RunStats.DrainTPS].
+// The last second is partial, as in interiorBuckets, so it is left out.
+func drainBuckets(buckets []tpsBucket, sendEnd time.Time) []tpsBucket {
+	whole := buckets[:max(len(buckets)-1, 0)]
+	return whole[sort.Search(len(whole), func(i int) bool { return whole[i].At.After(sendEnd) }):]
+}
+
 func parseBlockTimestamp(raw string) (int64, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -169,6 +176,11 @@ type RunStats struct {
 	MedianTPS     float64
 	ActiveSeconds int
 	FullSeconds   int
+	// DrainTPS is the rate over the DrainSeconds whole seconds after the sender
+	// finished, when block production no longer shares the node with
+	// transaction intake. Zero seconds means the chain kept pace with the sender.
+	DrainTPS     float64
+	DrainSeconds int
 }
 
 // tpsMinFullSeconds is the fewest whole seconds of production worth quoting a
@@ -184,8 +196,9 @@ func (s RunStats) TooShort() bool {
 
 // DumpBlockStats reads blocks startHeight..endHeight and writes the run's
 // summary to out. A non-nil own counts only those transactions: on a shared
-// chain the blocks also carry everyone else's.
-func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpcURL string, startHeight, endHeight int64, txsSent int, own TxSet) (RunStats, error) {
+// chain the blocks also carry everyone else's. sendEnd is when the sender
+// finished, see [RunStats.DrainTPS].
+func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpcURL string, startHeight, endHeight int64, txsSent int, sendEnd time.Time, own TxSet) (RunStats, error) {
 	const blockReadRetries = 8
 	const blockReadRetryDelay = 300 * time.Millisecond
 	const blockFetchConcurrency = 12
@@ -319,6 +332,7 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 		missingTxs = 0
 	}
 	_, _ = fmt.Fprintf(out, "tx_summary sent=%d included=%d missing=%d non_empty_blocks=%d\n", txsSent, totalIncludedTxs, missingTxs, nonEmptyBlocks)
+	drain := drainBuckets(buckets, sendEnd)
 	stats := RunStats{
 		IncludedTxs:   totalIncludedTxs,
 		SustainedTPS:  sustainedTPS(buckets),
@@ -326,6 +340,8 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 		MedianTPS:     medianTPS(buckets),
 		ActiveSeconds: len(buckets),
 		FullSeconds:   len(interiorBuckets(buckets)),
+		DrainTPS:      meanTPS(drain),
+		DrainSeconds:  len(drain),
 	}
 	_, _ = fmt.Fprintf(out,
 		"tps_summary full_second=%.2f sustained=%.2f median_second=%.2f active_seconds=%d full_seconds=%d\n",
@@ -339,6 +355,8 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 				"num_accounts*num_txs (%d) rather than by the chain. Raise the load until full_seconds >= %d.\n",
 			stats.FullSeconds, stats.ActiveSeconds, txsSent, tpsMinFullSeconds)
 	}
+
+	_, _ = fmt.Fprintf(out, "drain_summary tps=%.2f seconds=%d\n", stats.DrainTPS, stats.DrainSeconds)
 
 	sort.Slice(buckets, func(i, j int) bool { return buckets[i].Rate > buckets[j].Rate })
 	top := min(len(buckets), 5)

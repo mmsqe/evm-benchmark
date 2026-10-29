@@ -749,6 +749,7 @@ func doRun(
 	} else {
 		sendStats = bench.BroadcastRawTxs(ctx, client, rpcURL, txs, opts)
 	}
+	sendEnd := time.Now()
 	logger.Info("broadcast complete",
 		"node", target.GlobalSeq,
 		"seconds", sendStats.Duration.Seconds(),
@@ -839,7 +840,7 @@ func doRun(
 			"node", target.GlobalSeq, "max_pending", sendStats.MaxPending, "sent", sendStats.Sent)
 	}
 
-	stats, err := bench.DumpBlockStats(ctx, statsFile, client, rpcURL, statsFrom, end, len(txs), own)
+	stats, err := bench.DumpBlockStats(ctx, statsFile, client, rpcURL, statsFrom, end, len(txs), sendEnd, own)
 	if err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("dump block stats: %w", err)
 	}
@@ -880,6 +881,8 @@ func doRun(
 		FullSecondTPS: stats.FullSecondTPS,
 		ActiveSeconds: stats.ActiveSeconds,
 		FullSeconds:   stats.FullSeconds,
+		DrainTPS:      stats.DrainTPS,
+		DrainSeconds:  stats.DrainSeconds,
 		PendingTxpool: pendingTxpool,
 		TopTPS:        topTPS,
 		TopTPSDetails: topTPSDetails,

@@ -48,12 +48,13 @@ still load.
 
 ## Measuring
 
-Every run writes `block_stats.log` and echoes a summary line. Four lines matter:
+Every run writes `block_stats.log` and echoes a summary line. Five lines matter:
 
 | line | read it as |
 |---|---|
 | `tx_summary` | `included` far below `sent` means the run measured rejection |
 | `tps_summary` | **quote `full_second`** — see below |
+| `drain_summary` | the rate once the sender is done and block production has the node to itself; `seconds=0` means the chain kept pace with the sender, and over a few seconds the rate moves with how many blocks landed in them |
 | `tps_warning` | fewer than 5 whole seconds; the load, not the chain, set the rate |
 | `send_warning` | the pool never reached a quarter of the load, so the chain kept pace with the sender and the rate is a lower bound |
 

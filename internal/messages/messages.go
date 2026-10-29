@@ -246,6 +246,10 @@ type NodeRunResult struct {
 	FullSeconds   int
 	SustainedTPS  float64
 	ActiveSeconds int
+	// DrainTPS is the rate over the DrainSeconds whole seconds after the sender
+	// finished, see bench.RunStats.
+	DrainTPS      float64
+	DrainSeconds  int
 	PendingTxpool int64
 	TopTPS        []float64
 	TopTPSDetails []TPSDetail

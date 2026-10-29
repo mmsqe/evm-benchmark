@@ -147,6 +147,27 @@ func TestBucketTPSCountsSecondsWithoutBlocks(t *testing.T) {
 	}
 }
 
+// TestDrainBucketsCoverSecondsAfterTheSend: the seconds shared with transaction
+// intake are left out, and so is the partial last second.
+func TestDrainBucketsCoverSecondsAfterTheSend(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	var points []blockPoint
+	for i, txs := range []int{100, 200, 300, 400, 500, 50} {
+		points = append(points, blocksAt(int64(i+1), base.Add(time.Duration(i)*time.Second), 1, txs)...)
+	}
+	buckets := bucketTPS(points)
+
+	// The sender finished during the second of block 2: blocks 3-5 are the drain.
+	drain := drainBuckets(buckets, base.Add(1500*time.Millisecond))
+	if tps, seconds := meanTPS(drain), len(drain); tps != 400 || seconds != 3 {
+		t.Errorf("drain = %.0f over %d s, want 400 over 3 (300+400+500)", tps, seconds)
+	}
+	// A chain that kept pace has nothing left to drain once the sender is done.
+	if drain := drainBuckets(buckets, base.Add(5500*time.Millisecond)); len(drain) != 0 {
+		t.Errorf("drain after the last block = %d s, want none", len(drain))
+	}
+}
+
 func TestBucketTPSEmpty(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	if got := bucketTPS(blocksAt(1, base, 3, 0)); got != nil {

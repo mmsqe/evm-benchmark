@@ -125,7 +125,7 @@ func TestDumpBlockStatsCountsOnlyOwn(t *testing.T) {
 	srv := fakeRPC(t, chain.handle)
 
 	var out bytes.Buffer
-	stats, err := DumpBlockStats(context.Background(), &out, srv.Client(), srv.URL, 101, 105, 4, ownSet("0xa", "0xb", "0xc", "0xd"))
+	stats, err := DumpBlockStats(context.Background(), &out, srv.Client(), srv.URL, 101, 105, 4, time.Time{}, ownSet("0xa", "0xb", "0xc", "0xd"))
 	if err != nil {
 		t.Fatalf("DumpBlockStats: %v", err)
 	}
