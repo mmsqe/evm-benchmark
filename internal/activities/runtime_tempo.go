@@ -107,9 +107,6 @@ func (tempoRuntime) EnrichSpec(spec *messages.BenchmarkSpec) error {
 // Bootstrap materialises the network under spec.DataDir/devnet, generating
 // genesis, keys and per-node launchers in-process (see generateTempoDevnet).
 func (t tempoRuntime) Bootstrap(ctx context.Context, spec messages.BenchmarkSpec, nodes []messages.NodeTarget) error {
-	if spec.Fullnodes > 0 {
-		return fmt.Errorf("tempo runtime does not support fullnodes yet (got %d)", spec.Fullnodes)
-	}
 	if spec.RemoteRPCURL != "" {
 		return bootstrapTempoRemote(ctx, spec, nodes)
 	}
@@ -176,6 +173,9 @@ func tempoComposeArgs(spec messages.BenchmarkSpec, args ...string) []string {
 // 8545, and launches `<binary> start --home`), none of which matches a Tempo
 // devnet, so it must be refused rather than silently mis-run.
 func (tempoRuntime) Validate(spec messages.BenchmarkSpec) error {
+	if spec.Fullnodes > 0 {
+		return fmt.Errorf("tempo runtime does not support fullnodes yet (got %d)", spec.Fullnodes)
+	}
 	if spec.RemoteRPCURL != "" {
 		return validateTempoRemote(spec)
 	}

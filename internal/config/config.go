@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/go-jsonnet"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
+	"go.temporal.io/sdk/client"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,6 +29,19 @@ type TemporalConfig struct {
 	HostPort  string `yaml:"host_port"`
 	Namespace string `yaml:"namespace"`
 	TaskQueue string `yaml:"task_queue"`
+}
+
+// Dial connects to the Temporal server the config names.
+func (c TemporalConfig) Dial() (client.Client, error) {
+	return client.Dial(client.Options{
+		HostPort:  c.HostPort,
+		Namespace: c.Namespace,
+		ConnectionOptions: client.ConnectionOptions{
+			DisableKeepAliveCheck:               true,
+			DisableKeepAlivePermitWithoutStream: true,
+			GetSystemInfoTimeout:                15 * time.Second,
+		},
+	})
 }
 
 type StartConfig struct {
@@ -194,22 +209,15 @@ func applyChainConfig(configPath string, cfg *AppConfig) error {
 		spec.EVMChainID = record.EVMChainID
 	}
 
-	chainGenesisPatch := map[string]interface{}{}
-	chainAppState := map[string]interface{}{}
+	appState := map[string]interface{}{}
 	if record.Bank != nil {
-		chainAppState["bank"] = record.Bank
+		appState["bank"] = record.Bank
 	}
 	if record.EVM != nil {
-		chainAppState["evm"] = record.EVM
+		appState["evm"] = record.EVM
 	}
-	if len(chainAppState) > 0 {
-		chainGenesisPatch["app_state"] = chainAppState
-	}
-	if len(chainGenesisPatch) > 0 {
-		mergedGenesisPatch := map[string]interface{}{}
-		mergeMaps(mergedGenesisPatch, chainGenesisPatch)
-		mergeMaps(mergedGenesisPatch, spec.GenesisPatch)
-		spec.GenesisPatch = mergedGenesisPatch
+	if len(appState) > 0 {
+		spec.GenesisPatch = DeepMerge(map[string]interface{}{"app_state": appState}, spec.GenesisPatch)
 	}
 
 	return nil
@@ -227,24 +235,22 @@ func evaluateChainProfile(chainsPath, name string) ([]byte, error) {
 	return []byte(out), nil
 }
 
-func mergeMaps(dst, src map[string]interface{}) {
-	if src == nil {
-		return
-	}
-	for k, v := range src {
-		if srcMap, ok := v.(map[string]interface{}); ok {
-			if dstMap, ok := dst[k].(map[string]interface{}); ok {
-				mergeMaps(dstMap, srcMap)
-				dst[k] = dstMap
-			} else {
-				next := map[string]interface{}{}
-				mergeMaps(next, srcMap)
-				dst[k] = next
+// DeepMerge merges src into dst and returns dst: objects merge recursively, any
+// other value replaces dst's. Objects src adds are copied, so one patch can be
+// applied to several documents.
+func DeepMerge(dst, src map[string]interface{}) map[string]interface{} {
+	for k, sv := range src {
+		if svMap, ok := sv.(map[string]interface{}); ok {
+			dvMap, _ := dst[k].(map[string]interface{})
+			if dvMap == nil {
+				dvMap = make(map[string]interface{}, len(svMap))
 			}
+			dst[k] = DeepMerge(dvMap, svMap)
 			continue
 		}
-		dst[k] = v
+		dst[k] = sv
 	}
+	return dst
 }
 
 func applyDefaults(cfg *AppConfig) {

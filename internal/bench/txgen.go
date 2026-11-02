@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
+	"github.com/mmsqe/evm-benchmark/internal/tempotx"
 )
 
 const (
@@ -174,8 +175,7 @@ func makeTx(spec messages.BenchmarkSpec, from common.Address, nonce uint64, gasP
 		return types.NewTransaction(nonce, to, big.NewInt(1), spec.SimpleTransferGas, gasPrice, nil), nil
 	case messages.ERC20TransferTx:
 		contract := common.HexToAddress(spec.ERC20ContractAddress)
-		data := buildERC20TransferData(to, big.NewInt(1))
-		return types.NewTransaction(nonce, contract, big.NewInt(0), spec.ERC20TransferGas, gasPrice, data), nil
+		return types.NewTransaction(nonce, contract, big.NewInt(0), spec.ERC20TransferGas, gasPrice, tempotx.Transfer(to, 1)), nil
 	default:
 		return nil, fmt.Errorf("unsupported tx type: %s", spec.TxType)
 	}
@@ -188,15 +188,4 @@ func makeTx(spec messages.BenchmarkSpec, from common.Address, nonce uint64, gasP
 func sendsToHotRecipient(percent int, nonce uint64) bool {
 	p := uint64(percent)
 	return (nonce+1)*p/100 > nonce*p/100
-}
-
-func buildERC20TransferData(to common.Address, amount *big.Int) []byte {
-	methodID := []byte{0xa9, 0x05, 0x9c, 0xbb}
-	toBytes := common.LeftPadBytes(to.Bytes(), 32)
-	amountBytes := common.LeftPadBytes(amount.Bytes(), 32)
-	data := make([]byte, 0, len(methodID)+64)
-	data = append(data, methodID...)
-	data = append(data, toBytes...)
-	data = append(data, amountBytes...)
-	return data
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/mmsqe/evm-benchmark/internal/config"
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 )
@@ -277,26 +278,15 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// patchGenesisJSON deep-merges patch into the genesis file: objects merge
-// recursively, everything else is replaced.
+// patchGenesisJSON applies patch to the genesis file.
 func patchGenesisJSON(genesisPath string, patch map[string]interface{}) error {
 	raw, err := os.ReadFile(genesisPath)
 	if err != nil {
 		return fmt.Errorf("read genesis for patch: %w", err)
 	}
-	// Decode with UseNumber so integers beyond float64's exact range (token
-	// balances reach 2**64-1) survive the round-trip verbatim instead of being
-	// mangled into scientific notation.
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var doc map[string]interface{}
-	if err := dec.Decode(&doc); err != nil {
-		return fmt.Errorf("decode genesis: %w", err)
-	}
-	merged := deepMergeJSON(doc, patch)
-	out, err := json.MarshalIndent(merged, "", "  ")
+	out, err := applyGenesisPatch(raw, patch)
 	if err != nil {
-		return fmt.Errorf("encode patched genesis: %w", err)
+		return err
 	}
 	if err := os.WriteFile(genesisPath, out, 0o644); err != nil {
 		return fmt.Errorf("write patched genesis: %w", err)
@@ -304,17 +294,18 @@ func patchGenesisJSON(genesisPath string, patch map[string]interface{}) error {
 	return nil
 }
 
-// deepMergeJSON recursively merges src into dst for nested objects; any
-// non-object value in src replaces the corresponding value in dst.
-func deepMergeJSON(dst, src map[string]interface{}) map[string]interface{} {
-	for k, sv := range src {
-		if svMap, ok := sv.(map[string]interface{}); ok {
-			if dvMap, ok := dst[k].(map[string]interface{}); ok {
-				dst[k] = deepMergeJSON(dvMap, svMap)
-				continue
-			}
-		}
-		dst[k] = sv
+// applyGenesisPatch deep-merges patch into a genesis document. UseNumber keeps
+// integers beyond float64's exact range (token balances reach 2**64-1) verbatim.
+func applyGenesisPatch(genesis []byte, patch map[string]interface{}) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(genesis))
+	dec.UseNumber()
+	var doc map[string]interface{}
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("decode genesis: %w", err)
 	}
-	return dst
+	out, err := json.MarshalIndent(config.DeepMerge(doc, patch), "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode patched genesis: %w", err)
+	}
+	return out, nil
 }

@@ -142,30 +142,6 @@ func TestPatchGenesisJSONPreservesLargeInts(t *testing.T) {
 	}
 }
 
-// TestDeepMergeJSON guards the genesis-patch semantics: nested objects merge
-// recursively while scalars and arrays are replaced wholesale.
-func TestDeepMergeJSON(t *testing.T) {
-	dst := map[string]interface{}{
-		"config": map[string]interface{}{"chainId": float64(1), "keep": "me"},
-		"scalar": "old",
-	}
-	src := map[string]interface{}{
-		"config": map[string]interface{}{"chainId": float64(2)},
-		"scalar": "new",
-	}
-	out := deepMergeJSON(dst, src)
-	cfg := out["config"].(map[string]interface{})
-	if cfg["chainId"] != float64(2) {
-		t.Errorf("chainId not overridden: %v", cfg["chainId"])
-	}
-	if cfg["keep"] != "me" {
-		t.Errorf("sibling key dropped during merge: %v", cfg)
-	}
-	if out["scalar"] != "new" {
-		t.Errorf("scalar not replaced: %v", out["scalar"])
-	}
-}
-
 // assertScript compares launchers through render, so a mismatch prints both as
 // they would be written.
 func assertScript(t *testing.T, got, want runScript) {

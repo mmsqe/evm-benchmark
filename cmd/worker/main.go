@@ -3,13 +3,10 @@ package main
 import (
 	"flag"
 	"log"
-	"time"
 
 	"github.com/mmsqe/evm-benchmark/internal/activities"
 	"github.com/mmsqe/evm-benchmark/internal/config"
 	"github.com/mmsqe/evm-benchmark/internal/workflows"
-	"go.temporal.io/sdk/activity"
-	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 )
 
@@ -23,29 +20,15 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	c, err := client.Dial(client.Options{
-		HostPort:  cfg.Temporal.HostPort,
-		Namespace: cfg.Temporal.Namespace,
-		ConnectionOptions: client.ConnectionOptions{
-			DisableKeepAliveCheck:               true,
-			DisableKeepAlivePermitWithoutStream: true,
-			GetSystemInfoTimeout:                15 * time.Second,
-		},
-	})
+	c, err := cfg.Temporal.Dial()
 	if err != nil {
 		log.Fatalf("dial temporal: %v", err)
 	}
 	defer c.Close()
 
 	w := worker.New(c, cfg.Temporal.TaskQueue, worker.Options{})
-
-	act := &activities.Activity{}
 	w.RegisterWorkflow(workflows.StatelessEVMBenchmarkWorkflow)
-	w.RegisterActivityWithOptions(act.GenerateLayout, activity.RegisterOptions{Name: "GenerateLayout"})
-	w.RegisterActivityWithOptions(act.LoadLayout, activity.RegisterOptions{Name: "LoadLayout"})
-	w.RegisterActivityWithOptions(act.PatchImage, activity.RegisterOptions{Name: "PatchImage"})
-	w.RegisterActivityWithOptions(act.GenerateTxs, activity.RegisterOptions{Name: "GenerateTxs"})
-	w.RegisterActivityWithOptions(act.RunNode, activity.RegisterOptions{Name: "RunNode"})
+	w.RegisterActivity(&activities.Activity{}) // every method, under its own name
 
 	if err := w.Run(worker.InterruptCh()); err != nil {
 		log.Fatalf("run worker: %v", err)

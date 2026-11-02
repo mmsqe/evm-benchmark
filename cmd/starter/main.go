@@ -28,15 +28,7 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	c, err := client.Dial(client.Options{
-		HostPort:  cfg.Temporal.HostPort,
-		Namespace: cfg.Temporal.Namespace,
-		ConnectionOptions: client.ConnectionOptions{
-			DisableKeepAliveCheck:               true,
-			DisableKeepAlivePermitWithoutStream: true,
-			GetSystemInfoTimeout:                15 * time.Second,
-		},
-	})
+	c, err := cfg.Temporal.Dial()
 	if err != nil {
 		log.Fatalf("dial temporal: %v", err)
 	}

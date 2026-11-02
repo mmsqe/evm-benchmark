@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mmsqe/evm-benchmark/internal/bench"
+	"github.com/mmsqe/evm-benchmark/internal/config"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 )
 
@@ -154,7 +155,7 @@ func rethGenesis(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) (map[
 		"baseFeePerGas": fmt.Sprintf("0x%x", rethGenesisBaseFee),
 		"alloc":         alloc,
 	}
-	return deepMergeJSON(genesis, spec.GenesisPatch), nil
+	return config.DeepMerge(genesis, spec.GenesisPatch), nil
 }
 
 // rethTokenBalanceSlot is owner's balance slot in rethTokenCode:

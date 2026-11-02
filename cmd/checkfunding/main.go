@@ -31,12 +31,6 @@ import (
 	"github.com/mmsqe/evm-benchmark/internal/tempotx"
 )
 
-// ERC-20 selectors.
-var (
-	balanceOfSelector = []byte{0x70, 0xa0, 0x82, 0x31} // balanceOf(address)
-	transferSelector  = []byte{0xa9, 0x05, 0x9c, 0xbb} // transfer(address,uint256)
-)
-
 func main() {
 	rpcURL := flag.String("rpc", "http://127.0.0.1:8004", "EVM JSON-RPC endpoint")
 	accounts := flag.Int("accounts", 8, "number of benchmark accounts to check")
@@ -150,9 +144,7 @@ func probeTx(ctx context.Context, client *http.Client, rpcURL string, globalSeq 
 	target, data := from, []byte(nil)
 	if to != "" {
 		target = common.HexToAddress(to)
-		data = append(append([]byte{}, transferSelector...), append(
-			common.LeftPadBytes(from.Bytes(), 32),
-			common.LeftPadBytes(big.NewInt(1).Bytes(), 32)...)...)
+		data = tempotx.Transfer(from, 1)
 	}
 
 	tx := types.NewTransaction(nonce, target, value, gas, big.NewInt(gasPrice), data)
@@ -192,8 +184,7 @@ func probeTx(ctx context.Context, client *http.Client, rpcURL string, globalSeq 
 }
 
 func tokenBalance(ctx context.Context, client *http.Client, rpcURL, token string, holder common.Address) (*big.Int, error) {
-	data := append(append([]byte{}, balanceOfSelector...), common.LeftPadBytes(holder.Bytes(), 32)...)
-	call := map[string]string{"to": token, "data": "0x" + common.Bytes2Hex(data)}
+	call := map[string]string{"to": token, "data": "0x" + common.Bytes2Hex(tempotx.BalanceOf(holder))}
 
 	var result string
 	if err := bench.JSONRPCCall(ctx, client, rpcURL, "eth_call", []interface{}{call, "latest"}, &result); err != nil {

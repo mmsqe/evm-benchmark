@@ -18,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
+	"github.com/mmsqe/evm-benchmark/internal/tempotx"
 )
 
 // A valid mnemonic other than the devnets' public one; remote mode refuses that.
@@ -82,7 +83,7 @@ func (f *fakeTempo) handle(method string, params json.RawMessage) (interface{}, 
 				balance = new(big.Int)
 			}
 			return word(balance), ""
-		case strings.EqualFold(call.To, tempoNoncePrecompile):
+		case strings.EqualFold(call.To, tempotx.NoncePrecompile.Hex()):
 			key := new(big.Int).SetBytes(data[36:68])
 			if key.Sign() == 0 {
 				return nil, "protocol nonce not supported"

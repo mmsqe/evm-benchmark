@@ -93,11 +93,11 @@ func DetectIdleOrHalt(ctx context.Context, client *http.Client, rpcURL string, i
 				}
 			}
 			if idle {
-				pending, err := TxPoolPendingCount(ctx, client, rpcURL)
+				pending, queued, err := TxPoolStatus(ctx, client, rpcURL)
 				if err != nil {
 					fmt.Printf("[bench] idle confirmed at height=%d (txpool status failed: %v)\n", h, err)
 				} else {
-					fmt.Printf("[bench] idle confirmed at height=%d pending_txpool=%d\n", h, pending)
+					fmt.Printf("[bench] idle confirmed at height=%d pending_txpool=%d\n", h, pending+queued)
 				}
 				return nil
 			}

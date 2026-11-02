@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mmsqe/evm-benchmark/internal/bench"
+	"github.com/mmsqe/evm-benchmark/internal/config"
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 	"github.com/mmsqe/evm-benchmark/internal/tempotx"
@@ -686,9 +687,9 @@ func doRun(
 		return messages.NodeRunResult{}, fmt.Errorf("wait idle/halt: %w", err)
 	}
 
-	pendingTxpool := int64(-1)
-	if pending, pendingErr := bench.TxPoolPendingCount(ctx, client, rpcURL); pendingErr == nil {
-		pendingTxpool = pending
+	pendingTxpool := int64(-1) // unknown, unless the pool answers
+	if pending, queued, err := bench.TxPoolStatus(ctx, client, rpcURL); err == nil {
+		pendingTxpool = pending + queued
 	}
 
 	end, err := bench.CurrentHeight(ctx, client, rpcURL)
@@ -1227,7 +1228,7 @@ func patchConfigToml(home string, nodes []messages.NodeTarget, spec messages.Ben
 	if spec.RunnerType == "docker" {
 		setNested(cfg, []string{"rpc", "laddr"}, "tcp://0.0.0.0:26657")
 	}
-	mergeMaps(cfg, spec.ConfigPatch)
+	config.DeepMerge(cfg, spec.ConfigPatch)
 
 	outCfg, err := tomlv2.Marshal(cfg)
 	if err != nil {
@@ -1260,7 +1261,7 @@ func patchConfigToml(home string, nodes []messages.NodeTarget, spec messages.Ben
 		setNested(appCfg, []string{"json-rpc", "address"}, "0.0.0.0:8545")
 		setNested(appCfg, []string{"json-rpc", "ws-address"}, "0.0.0.0:8546")
 	}
-	mergeMaps(appCfg, spec.AppPatch)
+	config.DeepMerge(appCfg, spec.AppPatch)
 
 	outApp, err := tomlv2.Marshal(appCfg)
 	if err != nil {
@@ -1327,72 +1328,6 @@ func setNested(m map[string]interface{}, keys []string, val interface{}) {
 		cur = nm
 	}
 	cur[keys[len(keys)-1]] = val
-}
-
-func mergeMaps(dst, patch map[string]interface{}) {
-	if patch == nil {
-		return
-	}
-	for k, v := range patch {
-		v = normalizeValue(v)
-		if vMap, ok := v.(map[string]interface{}); ok {
-			if existing, ok := dst[k].(map[string]interface{}); ok {
-				mergeMaps(existing, vMap)
-				dst[k] = existing
-				continue
-			}
-			nm := map[string]interface{}{}
-			mergeMaps(nm, vMap)
-			dst[k] = nm
-			continue
-		}
-		dst[k] = v
-	}
-}
-
-func normalizeValue(v interface{}) interface{} {
-	switch t := v.(type) {
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(t))
-		for k, vv := range t {
-			out[k] = normalizeValue(vv)
-		}
-		return out
-	case map[interface{}]interface{}:
-		out := make(map[string]interface{}, len(t))
-		for k, vv := range t {
-			out[fmt.Sprintf("%v", k)] = normalizeValue(vv)
-		}
-		return out
-	case []interface{}:
-		out := make([]interface{}, len(t))
-		for i, item := range t {
-			out[i] = normalizeValue(item)
-		}
-		return out
-	default:
-		return v
-	}
-}
-
-func applyGenesisPatch(genesis []byte, patch map[string]interface{}) ([]byte, error) {
-	if len(patch) == 0 {
-		return genesis, nil
-	}
-	var doc map[string]interface{}
-	if err := json.Unmarshal(genesis, &doc); err != nil {
-		return nil, fmt.Errorf("decode genesis json: %w", err)
-	}
-	normalizedPatch, ok := normalizeValue(patch).(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid genesis patch structure")
-	}
-	mergeMaps(doc, normalizedPatch)
-	out, err := json.Marshal(doc)
-	if err != nil {
-		return nil, fmt.Errorf("encode genesis json: %w", err)
-	}
-	return out, nil
 }
 
 func chainCmd(ctx context.Context, binary string, stdin []byte, args ...string) ([]byte, error) {

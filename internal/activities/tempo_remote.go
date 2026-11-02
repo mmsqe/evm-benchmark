@@ -24,10 +24,6 @@ import (
 // signing starts from their on-chain nonces instead of 0.
 
 const (
-	// tempoNoncePrecompile holds the nonces of user nonce keys; key 0 is the
-	// account's own nonce, which it refuses to report.
-	tempoNoncePrecompile = "0x4E4F4E4345000000000000000000000000000000"
-
 	// tempoGasPriceScale converts gas-price units (attodollars) to TIP-20 base
 	// units (6 decimals).
 	tempoGasPriceScale = 1_000_000_000_000
@@ -44,11 +40,6 @@ const (
 	// publicTestMnemonic is what the devnet configs sign with. Its keys are
 	// published, so on a public chain its accounts are everyone's.
 	publicTestMnemonic = "test test test test test test test test test test test junk"
-)
-
-var (
-	getNonceSelector  = []byte{0x89, 0x53, 0x58, 0x03} // getNonce(address,uint256)
-	balanceOfSelector = []byte{0x70, 0xa0, 0x82, 0x31} // balanceOf(address)
 )
 
 func validateTempoRemote(spec messages.BenchmarkSpec) error {
@@ -204,7 +195,7 @@ func fundFromIndex0(ctx context.Context, spec messages.BenchmarkSpec, short []co
 	}
 	from := crypto.PubkeyToAddress(key.PublicKey)
 	vals, err := readNumbers(ctx, spec, []bench.RPCCall{
-		ethCall(tempoDefaultFeeToken, balanceOfSelector, from.Bytes()),
+		ethCall(tempotx.FeeToken, tempotx.BalanceOf(from)),
 		{Method: "eth_getTransactionCount", Params: []interface{}{from.Hex(), "pending"}},
 		{Method: "eth_gasPrice", Params: []interface{}{}},
 	})
@@ -259,7 +250,7 @@ func fundFromIndex0(ctx context.Context, spec messages.BenchmarkSpec, short []co
 func tempoShortOfFees(ctx context.Context, spec messages.BenchmarkSpec, accounts []common.Address, need *big.Int) ([]common.Address, error) {
 	calls := make([]bench.RPCCall, len(accounts))
 	for i, addr := range accounts {
-		calls[i] = ethCall(tempoDefaultFeeToken, balanceOfSelector, addr.Bytes())
+		calls[i] = ethCall(tempotx.FeeToken, tempotx.BalanceOf(addr))
 	}
 	balances, err := readNumbers(ctx, spec, calls)
 	if err != nil {
@@ -290,7 +281,7 @@ func tempoRemoteNonces(ctx context.Context, spec messages.BenchmarkSpec, target 
 				// "pending" also counts what an earlier run left in the pool.
 				calls = append(calls, bench.RPCCall{Method: "eth_getTransactionCount", Params: []interface{}{addr.Hex(), "pending"}})
 			} else {
-				calls = append(calls, ethCall(tempoNoncePrecompile, getNonceSelector, addr.Bytes(), new(big.Int).SetUint64(key).Bytes()))
+				calls = append(calls, ethCall(tempotx.NoncePrecompile, tempotx.GetNonce(addr, key)))
 			}
 		}
 	}
@@ -310,14 +301,10 @@ func tempoRemoteNonces(ctx context.Context, spec messages.BenchmarkSpec, target 
 // remoteClient serves the few reads and faucet calls made before the load.
 var remoteClient = &http.Client{Timeout: 10 * time.Second}
 
-// ethCall is an eth_call of selector on `to` with 32-byte word arguments.
-func ethCall(to string, selector []byte, words ...[]byte) bench.RPCCall {
-	data := append([]byte{}, selector...)
-	for _, w := range words {
-		data = append(data, common.LeftPadBytes(w, 32)...)
-	}
+// ethCall is an eth_call of data on to.
+func ethCall(to common.Address, data []byte) bench.RPCCall {
 	return bench.RPCCall{Method: "eth_call", Params: []interface{}{
-		map[string]string{"to": to, "data": hexutil.Encode(data)}, "latest",
+		map[string]string{"to": to.Hex(), "data": hexutil.Encode(data)}, "latest",
 	}}
 }
 

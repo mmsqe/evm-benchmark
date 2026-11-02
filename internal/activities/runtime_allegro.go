@@ -64,9 +64,6 @@ func (allegroRuntime) EnrichSpec(spec *messages.BenchmarkSpec) error {
 // Bootstrap materialises the network under spec.DataDir/devnet: genesis (with
 // the benchmark's accounts funded) and a per-node home with a launcher.
 func (a allegroRuntime) Bootstrap(ctx context.Context, spec messages.BenchmarkSpec, nodes []messages.NodeTarget) error {
-	if err := a.Validate(spec); err != nil {
-		return err
-	}
 	if err := assertRPCPortsFree(a, spec, nodes); err != nil {
 		return err
 	}

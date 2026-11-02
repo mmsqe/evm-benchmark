@@ -29,6 +29,7 @@ var FeeToken = GenesisTokens[0]
 func selector(sig string) []byte { return crypto.Keccak256([]byte(sig))[:4] }
 
 var (
+	selBalanceOf        = selector("balanceOf(address)")
 	selTransfer         = selector("transfer(address,uint256)")
 	selApprove          = selector("approve(address,uint256)")
 	selTransferFrom     = selector("transferFrom(address,address,uint256)")
@@ -38,6 +39,11 @@ var (
 func padAddr(a common.Address) []byte { return common.LeftPadBytes(a.Bytes(), 32) }
 
 func padUint(v uint64) []byte { return common.LeftPadBytes(binary.BigEndian.AppendUint64(nil, v), 32) }
+
+// BalanceOf builds balanceOf(holder) calldata.
+func BalanceOf(holder common.Address) []byte {
+	return slices.Concat(selBalanceOf, padAddr(holder))
+}
 
 // Transfer builds transfer(to, amount) calldata.
 func Transfer(to common.Address, amount uint64) []byte {

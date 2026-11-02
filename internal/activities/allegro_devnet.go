@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mmsqe/evm-benchmark/internal/config"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 )
 
@@ -99,7 +100,7 @@ func allegroGenesisPatch(spec messages.BenchmarkSpec, nodes []messages.NodeTarge
 		// would be read as a much smaller budget.
 		patch["gasLimit"] = fmt.Sprintf("0x%x", spec.AllegroGasLimit)
 	}
-	return deepMergeJSON(patch, spec.GenesisPatch), nil
+	return config.DeepMerge(patch, spec.GenesisPatch), nil
 }
 
 // allegroFundedAlloc is the genesis alloc entry for every account the load

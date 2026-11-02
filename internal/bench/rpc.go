@@ -529,8 +529,3 @@ func TxPoolStatus(ctx context.Context, client *http.Client, rpcURL string) (pend
 	}
 	return pending, queued, nil
 }
-
-func TxPoolPendingCount(ctx context.Context, client *http.Client, rpcURL string) (int64, error) {
-	pending, queued, err := TxPoolStatus(ctx, client, rpcURL)
-	return pending + queued, err
-}
