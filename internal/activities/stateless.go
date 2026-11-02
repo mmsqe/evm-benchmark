@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -145,18 +144,6 @@ func (a *Activity) LoadLayout(_ context.Context, req messages.LoadLayoutRequest)
 
 func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequest) (int, error) {
 	logger := activity.GetLogger(ctx)
-	gomaxprocs := runtime.GOMAXPROCS(0)
-	maxWorkers := max(1, gomaxprocs-bench.SigningHeadroomReserved)
-	logger.Info(
-		"generate txs signing parallelism",
-		"node", req.Target.GlobalSeq,
-		"worker_count", bench.SigningWorkerCount(req.Spec.NumAccounts),
-		"gomaxprocs", gomaxprocs,
-		"total_accounts", req.Spec.NumAccounts,
-		"headroom_reserved", bench.SigningHeadroomReserved,
-		"pre_cap_workers", maxWorkers,
-		"cap_workers", bench.SigningWorkerCap,
-	)
 	logger.Info("generate txs started", "node", req.Target.GlobalSeq, "accounts", req.Spec.NumAccounts, "txs_per_account", req.Spec.NumTxs)
 
 	chain, err := resolveRuntime(req.Spec)

@@ -8,8 +8,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type blockPoint struct {
@@ -199,115 +200,40 @@ func (s RunStats) TooShort() bool {
 // chain the blocks also carry everyone else's. sendEnd is when the sender
 // finished, see [RunStats.DrainTPS].
 func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpcURL string, startHeight, endHeight int64, txsSent int, sendEnd time.Time, own TxSet) (RunStats, error) {
-	const blockReadRetries = 8
-	const blockReadRetryDelay = 300 * time.Millisecond
-	const blockFetchConcurrency = 12
 	if endHeight < startHeight {
 		return RunStats{}, nil
 	}
 
-	type fetchedBlock struct {
-		height int64
-		point  blockPoint
-		err    error
+	type fetched struct {
+		point blockPoint
+		err   error
 	}
-
-	jobs := make(chan int64, blockFetchConcurrency)
-	results := make(chan fetchedBlock, int(endHeight-startHeight+1))
-
-	workerCount := blockFetchConcurrency
-	if total := int(endHeight - startHeight + 1); total < workerCount {
-		workerCount = total
-	}
-	if workerCount < 1 {
-		workerCount = 1
-	}
-
-	var wg sync.WaitGroup
-	for i := 0; i < workerCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for h := range jobs {
-				var point blockPoint
-				var lastErr error
-				ok := false
-
-				for attempt := 1; attempt <= blockReadRetries; attempt++ {
-					blk, err := BlockByNumber(ctx, client, rpcURL, h)
-					if err != nil {
-						lastErr = fmt.Errorf("read block: %w", err)
-					} else {
-						tsRaw, tsErr := parseBlockTimestamp(blk.Timestamp)
-						if tsErr != nil {
-							lastErr = fmt.Errorf("parse timestamp %q: %w", blk.Timestamp, tsErr)
-						} else {
-							txs := len(blk.Transactions)
-							if own != nil {
-								txs = own.Count(blk.Transactions)
-							}
-							point = blockPoint{Height: h, Txs: txs, At: time.Unix(tsRaw, 0)}
-							ok = true
-							break
-						}
-					}
-
-					if attempt < blockReadRetries {
-						select {
-						case <-ctx.Done():
-							results <- fetchedBlock{height: h, err: ctx.Err()}
-							goto nextJob
-						case <-time.After(blockReadRetryDelay):
-						}
-					}
-				}
-
-				if !ok {
-					results <- fetchedBlock{height: h, err: lastErr}
-				} else {
-					results <- fetchedBlock{height: h, point: point}
-				}
-
-			nextJob:
-			}
-		}()
-	}
-
+	results := make([]fetched, endHeight-startHeight+1)
+	var fetches errgroup.Group
+	fetches.SetLimit(12)
 	for h := startHeight; h <= endHeight; h++ {
-		jobs <- h
+		fetches.Go(func() error {
+			point, err := fetchBlockPoint(ctx, client, rpcURL, h, own)
+			results[h-startHeight] = fetched{point, err}
+			return nil // a block that stays unreadable is reported, not fatal
+		})
 	}
-	close(jobs)
-
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	byHeight := make(map[int64]fetchedBlock, endHeight-startHeight+1)
-	for r := range results {
-		if r.err == ctx.Err() && ctx.Err() != nil {
-			return RunStats{}, ctx.Err()
-		}
-		byHeight[r.height] = r
+	_ = fetches.Wait()
+	if err := ctx.Err(); err != nil {
+		return RunStats{}, err
 	}
 
-	points := make([]blockPoint, 0, endHeight-startHeight+1)
+	points := make([]blockPoint, 0, len(results))
 	totalIncludedTxs := 0
 	nonEmptyBlocks := 0
-
-	for h := startHeight; h <= endHeight; h++ {
-		fetched, ok := byHeight[h]
-		if !ok || fetched.err != nil {
-			if ok {
-				_, _ = fmt.Fprintf(out, "height=%d skipped: %v\n", h, fetched.err)
-			} else {
-				_, _ = fmt.Fprintf(out, "height=%d skipped: missing fetch result\n", h)
-			}
+	for i, r := range results {
+		if r.err != nil {
+			_, _ = fmt.Fprintf(out, "height=%d skipped: %v\n", startHeight+int64(i), r.err)
 			continue
 		}
-		points = append(points, fetched.point)
-		totalIncludedTxs += fetched.point.Txs
-		if fetched.point.Txs > 0 {
+		points = append(points, r.point)
+		totalIncludedTxs += r.point.Txs
+		if r.point.Txs > 0 {
 			nonEmptyBlocks++
 		}
 	}
@@ -372,4 +298,34 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 	}
 
 	return stats, nil
+}
+
+// fetchBlockPoint reads one block, retrying a failed read or an unreadable
+// timestamp a few times.
+func fetchBlockPoint(ctx context.Context, client *http.Client, rpcURL string, height int64, own TxSet) (blockPoint, error) {
+	const retries = 8
+	const retryDelay = 300 * time.Millisecond
+	var err error
+	for attempt := 1; ; attempt++ {
+		blk, readErr := BlockByNumber(ctx, client, rpcURL, height)
+		if readErr != nil {
+			err = fmt.Errorf("read block: %w", readErr)
+		} else if ts, tsErr := parseBlockTimestamp(blk.Timestamp); tsErr != nil {
+			err = fmt.Errorf("parse timestamp %q: %w", blk.Timestamp, tsErr)
+		} else {
+			txs := len(blk.Transactions)
+			if own != nil {
+				txs = own.Count(blk.Transactions)
+			}
+			return blockPoint{Height: height, Txs: txs, At: time.Unix(ts, 0)}, nil
+		}
+		if attempt == retries {
+			return blockPoint{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return blockPoint{}, ctx.Err()
+		case <-time.After(retryDelay):
+		}
+	}
 }

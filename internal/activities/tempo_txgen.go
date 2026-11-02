@@ -1,15 +1,16 @@
 package activities
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 	"github.com/mmsqe/evm-benchmark/internal/tempotx"
+	"golang.org/x/sync/errgroup"
 )
 
 // Native Tempo (0x76) transaction generation. Keys are derived exactly as
@@ -150,48 +151,20 @@ func generateTempoNativeTxs(ctx context.Context, spec messages.BenchmarkSpec, ta
 	}
 
 	batches := make([][]string, spec.NumAccounts)
-	jobs := make(chan int)
-	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex
-		firstErr error
-	)
-	workers := tempoSigningWorkers(spec)
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range jobs {
-				raws, err := signAccount(accountOffset + i + 1)
-				if err != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-					}
-					mu.Unlock()
-					continue
-				}
-				batches[i] = raws
-			}
-		}()
-	}
-feed:
-	for i := 0; i < spec.NumAccounts; i++ {
-		select {
-		case jobs <- i:
-		case <-ctx.Done():
-			mu.Lock()
-			if firstErr == nil {
-				firstErr = ctx.Err()
-			}
-			mu.Unlock()
-			break feed
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(tempoSigningWorkers(spec))
+	for i := range spec.NumAccounts {
+		if gctx.Err() != nil {
+			break // a signer failed, or the run was cancelled
 		}
+		g.Go(func() error {
+			raws, err := signAccount(accountOffset + i + 1)
+			batches[i] = raws
+			return err
+		})
 	}
-	close(jobs)
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
+	if err := cmp.Or(g.Wait(), ctx.Err()); err != nil {
+		return nil, err
 	}
 
 	raws := make([]string, 0, spec.NumAccounts*spec.NumTxs)

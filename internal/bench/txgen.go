@@ -14,28 +14,24 @@ import (
 )
 
 const (
+	// SigningHeadroomReserved is how many cores signing leaves to the rest of
+	// the process.
 	SigningHeadroomReserved = 2
-	SigningWorkerCap        = 8
+	signingWorkerCap        = 8
 )
 
 // HotRecipient receives the hot_recipient_percent share of every account's
 // transfers. No key controls it, so it only ever accumulates.
 var HotRecipient = common.HexToAddress("0x1111111111111111111111111111111111111111")
 
-func SigningWorkerCount(totalAccounts int) int {
-	if totalAccounts <= 0 {
-		return 0
-	}
-	return min(totalAccounts, min(SigningWorkerCap, max(1, runtime.GOMAXPROCS(0)-SigningHeadroomReserved)))
+func signingWorkerCount(totalAccounts int) int {
+	return min(totalAccounts, signingWorkerCap, max(1, runtime.GOMAXPROCS(0)-SigningHeadroomReserved))
 }
 
+// GenerateSignedTxs returns every account's transactions, account by account.
 func GenerateSignedTxs(spec messages.BenchmarkSpec, globalSeq int) ([]string, error) {
-	return GenerateSignedTxsWithProgress(spec, globalSeq, nil)
-}
-
-func GenerateSignedTxsWithProgress(spec messages.BenchmarkSpec, globalSeq int, onAccountDone func(done, total int)) ([]string, error) {
 	result := make([]string, 0, spec.NumAccounts*spec.NumTxs)
-	_, err := generateSignedTxs(spec, globalSeq, onAccountDone, func(raw string) error {
+	_, err := GenerateSignedTxsStream(spec, globalSeq, nil, func(raw string) error {
 		result = append(result, raw)
 		return nil
 	})
@@ -45,94 +41,59 @@ func GenerateSignedTxsWithProgress(spec messages.BenchmarkSpec, globalSeq int, o
 	return result, nil
 }
 
+type signedAccount struct {
+	txs []string
+	err error
+}
+
+// GenerateSignedTxsStream signs every account's transactions in parallel and
+// hands them to onTx in account order; onAccountDone, if set, follows each
+// account's last one.
 func GenerateSignedTxsStream(spec messages.BenchmarkSpec, globalSeq int, onAccountDone func(done, total int), onTx func(raw string) error) (int, error) {
-	return generateSignedTxs(spec, globalSeq, onAccountDone, onTx)
-}
-
-type signedAccountResult struct {
-	index int
-	txs   []string
-	err   error
-}
-
-func generateSignedTxs(spec messages.BenchmarkSpec, globalSeq int, onAccountDone func(done, total int), onTx func(raw string) error) (int, error) {
-	chainID := big.NewInt(spec.EVMChainID)
-	gasPrice := big.NewInt(spec.GasPriceWei)
-	totalAccounts := spec.NumAccounts
-	if totalAccounts <= 0 {
+	total := spec.NumAccounts
+	if total <= 0 {
 		return 0, nil
 	}
+	chainID := big.NewInt(spec.EVMChainID)
+	gasPrice := big.NewInt(spec.GasPriceWei)
 
-	workerCount := SigningWorkerCount(totalAccounts)
-	jobs := make(chan int, totalAccounts)
-	results := make(chan signedAccountResult, workerCount)
-
-	for worker := 0; worker < workerCount; worker++ {
+	// Each account has its own result slot, so the loop below emits accounts
+	// in order while the workers sign them in any.
+	results := make([]chan signedAccount, total)
+	for i := range results {
+		results[i] = make(chan signedAccount, 1)
+	}
+	jobs := make(chan int, total)
+	for i := range total {
+		jobs <- i
+	}
+	close(jobs)
+	for range signingWorkerCount(total) {
 		go func() {
-			for accountIndex := range jobs {
-				txs, err := signAccountTxs(spec, globalSeq, accountIndex, chainID, gasPrice)
-				results <- signedAccountResult{index: accountIndex, txs: txs, err: err}
+			for i := range jobs {
+				txs, err := signAccountTxs(spec, globalSeq, i, chainID, gasPrice)
+				results[i] <- signedAccount{txs, err}
 			}
 		}()
 	}
 
-	for accountIndex := 0; accountIndex < totalAccounts; accountIndex++ {
-		jobs <- accountIndex
-	}
-	close(jobs)
-
-	txCount := 0
-	nextAccount := 0
-	completed := 0
-	pending := make(map[int][]string, workerCount)
-	var firstErr error
-
-	for completed < totalAccounts {
-		result := <-results
-		completed++
-		if result.err != nil {
-			if firstErr == nil {
-				firstErr = result.err
-			}
-			continue
+	count := 0
+	for i, ch := range results {
+		r := <-ch
+		if r.err != nil {
+			return 0, r.err
 		}
-		if firstErr != nil {
-			continue
+		for _, raw := range r.txs {
+			if err := onTx(raw); err != nil {
+				return 0, err
+			}
 		}
-		pending[result.index] = result.txs
-
-		for {
-			txs, ok := pending[nextAccount]
-			if !ok {
-				break
-			}
-			delete(pending, nextAccount)
-
-			for _, raw := range txs {
-				if onTx != nil {
-					if err := onTx(raw); err != nil {
-						firstErr = err
-						break
-					}
-				}
-				txCount++
-			}
-
-			if firstErr != nil {
-				break
-			}
-			if onAccountDone != nil {
-				onAccountDone(nextAccount+1, totalAccounts)
-			}
-			nextAccount++
+		count += len(r.txs)
+		if onAccountDone != nil {
+			onAccountDone(i+1, total)
 		}
 	}
-
-	if firstErr != nil {
-		return 0, firstErr
-	}
-
-	return txCount, nil
+	return count, nil
 }
 
 func signAccountTxs(spec messages.BenchmarkSpec, globalSeq, accountIndex int, chainID, gasPrice *big.Int) ([]string, error) {

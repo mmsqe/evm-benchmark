@@ -6,8 +6,11 @@ require (
 	github.com/btcsuite/btcd/btcutil v1.1.6
 	github.com/ethereum/go-ethereum v1.15.11
 	github.com/google/go-jsonnet v0.21.0
+	github.com/miguelmota/go-ethereum-hdwallet v0.1.3
 	github.com/pelletier/go-toml/v2 v2.2.3
+	go.temporal.io/api v1.43.0
 	go.temporal.io/sdk v1.32.1
+	golang.org/x/sync v0.12.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -31,7 +34,6 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
-	github.com/miguelmota/go-ethereum-hdwallet v0.1.3 // indirect
 	github.com/mmcloughlin/addchain v0.4.0 // indirect
 	github.com/nexus-rpc/sdk-go v0.1.0 // indirect
 	github.com/pborman/uuid v1.2.1 // indirect
@@ -41,11 +43,9 @@ require (
 	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/supranational/blst v0.3.14 // indirect
 	github.com/tyler-smith/go-bip39 v1.1.0 // indirect
-	go.temporal.io/api v1.43.0 // indirect
 	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/exp v0.0.0-20231127185646-65229373498e // indirect
 	golang.org/x/net v0.36.0 // indirect
-	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.9.0 // indirect
