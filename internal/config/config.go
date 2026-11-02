@@ -168,7 +168,7 @@ func applyChainConfig(configPath string, cfg *AppConfig) error {
 	// does not depend on the worker process current working directory.
 	spec.ChainsConfigPath = chainsPath
 
-	out, err := EvaluateChainProfile(chainsPath, spec.ChainConfig)
+	out, err := evaluateChainProfile(chainsPath, spec.ChainConfig)
 	if err != nil {
 		return err
 	}
@@ -215,9 +215,9 @@ func applyChainConfig(configPath string, cfg *AppConfig) error {
 	return nil
 }
 
-// EvaluateChainProfile returns the profile called name from the chains jsonnet
+// evaluateChainProfile returns the profile called name from the chains jsonnet
 // file at chainsPath, as JSON. Only that profile is evaluated.
-func EvaluateChainProfile(chainsPath, name string) ([]byte, error) {
+func evaluateChainProfile(chainsPath, name string) ([]byte, error) {
 	vm := jsonnet.MakeVM()
 	vm.ExtVar("CHAIN_CONFIG", name)
 	out, err := vm.EvaluateAnonymousSnippet("chain_config", fmt.Sprintf("(import %q)[std.extVar('CHAIN_CONFIG')]", chainsPath))
@@ -274,9 +274,6 @@ func applyDefaults(cfg *AppConfig) {
 	if spec.DockerNetwork == "" {
 		spec.DockerNetwork = "evm-benchmark"
 	}
-	if !spec.DockerCreateNetwork {
-		spec.DockerCreateNetwork = true
-	}
 	if spec.HostnameTemplate == "" {
 		spec.HostnameTemplate = "testplan-%d"
 	}
@@ -288,12 +285,6 @@ func applyDefaults(cfg *AppConfig) {
 	}
 	if spec.Denom == "" {
 		spec.Denom = "amantra"
-	}
-	if spec.RPCURLTemplate == "" {
-		spec.RPCURLTemplate = "http://%s:8545"
-	}
-	if spec.TendermintURLTemplate == "" {
-		spec.TendermintURLTemplate = "http://%s:26657"
 	}
 	if spec.Validators == 0 {
 		spec.Validators = 1
@@ -331,9 +322,6 @@ func applyDefaults(cfg *AppConfig) {
 			spec.TxType = messages.SimpleTransferTx
 		}
 	}
-	if spec.BatchSize == 0 {
-		spec.BatchSize = 1
-	}
 	if spec.EVMChainID == 0 {
 		spec.EVMChainID = 7888
 	}
@@ -361,9 +349,6 @@ func applyDefaults(cfg *AppConfig) {
 	}
 	if spec.MinReadyHeight == 0 {
 		spec.MinReadyHeight = 3
-	}
-	if spec.PeerReadyTimeoutSeconds == 0 {
-		spec.PeerReadyTimeoutSeconds = 2400
 	}
 }
 

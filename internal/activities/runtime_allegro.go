@@ -44,8 +44,6 @@ var allegroPorts = portBlock{
 // binaries from the allegro repo.
 type allegroRuntime struct{ devnetRuntime }
 
-func (allegroRuntime) Name() string { return FamilyAllegro }
-
 // EnrichSpec applies Allegro-specific defaults. Allegro genesis deploys no
 // contracts, so the ERC-20 shape is only usable when the operator supplies both
 // a target address and its code (via genesis_patch); the native transfer shape

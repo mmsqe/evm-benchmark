@@ -27,7 +27,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mmsqe/evm-benchmark/internal/bench"
-	"github.com/mmsqe/evm-benchmark/internal/config"
 	"github.com/mmsqe/evm-benchmark/internal/keygen"
 	"github.com/mmsqe/evm-benchmark/internal/messages"
 	"github.com/mmsqe/evm-benchmark/internal/tempotx"
@@ -36,11 +35,6 @@ import (
 )
 
 type Activity struct{}
-
-type chainConfigRecord struct {
-	Bank map[string]interface{} `json:"bank"`
-	EVM  map[string]interface{} `json:"evm"`
-}
 
 const (
 	validatorKeyName      = "validator"
@@ -79,14 +73,6 @@ func (a *Activity) GenerateLayout(ctx context.Context, req messages.GenerateLayo
 		hostRPCPort := spec.RPCPort + globalSeq
 		hostEVMRPCPort := spec.EVMRPCPort + globalSeq
 
-		rpcURL := fmt.Sprintf("http://127.0.0.1:%d", chain.EVMRPCPort(spec, globalSeq))
-		if spec.RemoteRPCURL != "" {
-			rpcURL = spec.RemoteRPCURL
-		}
-		tmURL := fmt.Sprintf("http://127.0.0.1:%d", spec.RPCPort)
-		if spec.RunnerType == "docker" {
-			tmURL = fmt.Sprintf("http://127.0.0.1:%d", hostRPCPort)
-		}
 		return messages.NodeTarget{
 			GlobalSeq:      globalSeq,
 			Group:          group,
@@ -95,8 +81,6 @@ func (a *Activity) GenerateLayout(ctx context.Context, req messages.GenerateLayo
 			Home:           home,
 			HostRPCPort:    hostRPCPort,
 			HostEVMRPCPort: hostEVMRPCPort,
-			RPCURL:         rpcURL,
-			TMRPCURL:       tmURL,
 		}
 	}
 
@@ -126,14 +110,10 @@ func (a *Activity) GenerateLayout(ctx context.Context, req messages.GenerateLayo
 	if err := writeJSON(filepath.Join(spec.DataDir, "nodes.json"), nodes); err != nil {
 		return messages.GenerateLayoutResponse{}, err
 	}
-
-	_ = ctx
 	return messages.GenerateLayoutResponse{Nodes: nodes}, nil
 }
 
-func (a *Activity) LoadLayout(ctx context.Context, req messages.LoadLayoutRequest) (messages.LoadLayoutResponse, error) {
-	_ = ctx
-
+func (a *Activity) LoadLayout(_ context.Context, req messages.LoadLayoutRequest) (messages.LoadLayoutResponse, error) {
 	if req.Spec.OutDir != "" {
 		if err := os.MkdirAll(req.Spec.OutDir, 0o755); err != nil {
 			return messages.LoadLayoutResponse{}, fmt.Errorf("create output dir: %w", err)
@@ -162,58 +142,6 @@ func (a *Activity) LoadLayout(ctx context.Context, req messages.LoadLayoutReques
 	return messages.LoadLayoutResponse{Nodes: nodes}, nil
 }
 
-func enrichGenesisPatchFromChainConfig(spec *messages.BenchmarkSpec) error {
-	if spec == nil || strings.TrimSpace(spec.ChainConfig) == "" {
-		return nil
-	}
-
-	chainsPath := strings.TrimSpace(spec.ChainsConfigPath)
-	if chainsPath == "" {
-		return nil
-	}
-	if !filepath.IsAbs(chainsPath) {
-		wd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("resolve chains config path: %w", err)
-		}
-		chainsPath = filepath.Clean(filepath.Join(wd, chainsPath))
-	}
-	if _, err := os.Stat(chainsPath); err != nil {
-		return fmt.Errorf("chains config file %q: %w", chainsPath, err)
-	}
-
-	out, err := config.EvaluateChainProfile(chainsPath, spec.ChainConfig)
-	if err != nil {
-		return err
-	}
-
-	var record chainConfigRecord
-	if err := json.Unmarshal(out, &record); err != nil {
-		return fmt.Errorf("decode chain config json: %w", err)
-	}
-
-	chainGenesisPatch := map[string]interface{}{}
-	chainAppState := map[string]interface{}{}
-	if record.Bank != nil {
-		chainAppState["bank"] = record.Bank
-	}
-	if record.EVM != nil {
-		chainAppState["evm"] = record.EVM
-	}
-	if len(chainAppState) > 0 {
-		chainGenesisPatch["app_state"] = chainAppState
-	}
-	if len(chainGenesisPatch) == 0 {
-		return nil
-	}
-
-	mergedGenesisPatch := map[string]interface{}{}
-	mergeMaps(mergedGenesisPatch, chainGenesisPatch)
-	mergeMaps(mergedGenesisPatch, spec.GenesisPatch)
-	spec.GenesisPatch = mergedGenesisPatch
-	return nil
-}
-
 func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequest) (int, error) {
 	logger := activity.GetLogger(ctx)
 	gomaxprocs := runtime.GOMAXPROCS(0)
@@ -230,9 +158,6 @@ func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequ
 	)
 	logger.Info("generate txs started", "node", req.Target.GlobalSeq, "accounts", req.Spec.NumAccounts, "txs_per_account", req.Spec.NumTxs)
 
-	// Each activity receives the raw spec from the workflow, so family defaults
-	// (fee token, tx type) must be applied here too — GenerateLayout enriched
-	// only its own copy.
 	chain, err := resolveRuntime(req.Spec)
 	if err != nil {
 		return 0, err
@@ -313,7 +238,6 @@ func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequ
 		return 0, fmt.Errorf("flush tx file: %w", err)
 	}
 	logger.Info("generate txs completed", "node", req.Target.GlobalSeq, "total_txs", txCount)
-	_ = ctx
 	return txCount, nil
 }
 
@@ -427,7 +351,6 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 	if err != nil {
 		return messages.NodeRunResult{}, err
 	}
-	// See GenerateTxs: activities get the un-enriched spec from the workflow.
 	if err := chain.EnrichSpec(&spec); err != nil {
 		return messages.NodeRunResult{}, err
 	}
@@ -478,12 +401,8 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 	if spec.StartNode {
 
 		if spec.RunnerType == "docker" {
-			if spec.DockerCreateNetwork {
-				if _, err := chainCmd(ctx, "docker", nil, "network", "create", spec.DockerNetwork); err != nil {
-					if !strings.Contains(err.Error(), "already exists") {
-						return messages.NodeRunResult{}, fmt.Errorf("create docker network %q: %w", spec.DockerNetwork, err)
-					}
-				}
+			if _, err := chainCmd(ctx, "docker", nil, "network", "create", spec.DockerNetwork); err != nil && !strings.Contains(err.Error(), "already exists") {
+				return messages.NodeRunResult{}, fmt.Errorf("create docker network %q: %w", spec.DockerNetwork, err)
 			}
 			if err := ensureDockerVolumeHostDirs(spec.DockerVolumes); err != nil {
 				return messages.NodeRunResult{}, fmt.Errorf("prepare docker volume host dirs: %w", err)
@@ -550,9 +469,6 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 			}
 		} else {
 			argv, dir := chain.LocalStartCommand(spec, target)
-			if len(argv) == 0 {
-				return messages.NodeRunResult{}, fmt.Errorf("chain family %s has no local start command", chain.Name())
-			}
 			logHome := target.Home
 			if dir != "" {
 				logHome = dir
@@ -855,15 +771,8 @@ func doRun(
 	}
 
 	topTPS := make([]float64, 0, len(stats.Peaks))
-	topTPSDetails := make([]messages.TPSDetail, 0, len(stats.Peaks))
 	for _, p := range stats.Peaks {
 		topTPS = append(topTPS, p.TPS)
-		topTPSDetails = append(topTPSDetails, messages.TPSDetail{
-			Height: p.Height,
-			Time:   p.At.UTC().Format(time.RFC3339Nano),
-			Txs:    p.Txs,
-			TPS:    p.TPS,
-		})
 	}
 
 	if spec.OutDir != "" {
@@ -885,7 +794,6 @@ func doRun(
 		DrainSeconds:  stats.DrainSeconds,
 		PendingTxpool: pendingTxpool,
 		TopTPS:        topTPS,
-		TopTPSDetails: topTPSDetails,
 		StatsFile:     statsPath,
 	}, nil
 }
@@ -1111,7 +1019,13 @@ func bootstrapNodesAndGenesis(ctx context.Context, spec messages.BenchmarkSpec, 
 		return fmt.Errorf("benchmark.binary is required for bootstrap")
 	}
 
-	gentxPaths := make([]string, 0, spec.Validators)
+	// Every validator's gentx lands here for collect-gentxs.
+	gentxDir, err := os.MkdirTemp("", "evm-benchmark-gentx-")
+	if err != nil {
+		return fmt.Errorf("create gentx dir: %w", err)
+	}
+	defer os.RemoveAll(gentxDir)
+
 	for _, node := range nodes {
 		if err := os.RemoveAll(node.Home); err != nil {
 			return fmt.Errorf("reset node home %s: %w", node.Home, err)
@@ -1151,28 +1065,16 @@ func bootstrapNodesAndGenesis(ctx context.Context, spec messages.BenchmarkSpec, 
 				return fmt.Errorf("add validator self account for node %d: %w", node.GlobalSeq, err)
 			}
 
-			tmpGentx, err := os.CreateTemp("", fmt.Sprintf("gentx-%d-*.json", node.GlobalSeq))
-			if err != nil {
-				return fmt.Errorf("create temporary gentx file for node %d: %w", node.GlobalSeq, err)
-			}
-			gentxPath := tmpGentx.Name()
-			if err := tmpGentx.Close(); err != nil {
-				return fmt.Errorf("close temporary gentx file for node %d: %w", node.GlobalSeq, err)
-			}
-			if err := os.Remove(gentxPath); err != nil {
-				return fmt.Errorf("prepare gentx output path for node %d: %w", node.GlobalSeq, err)
-			}
 			if _, err := chainCmd(ctx, spec.Binary, nil,
 				"genesis", "gentx", validatorKeyName, validatorStakedCoins+spec.Denom,
 				"--home", node.Home,
 				"--chain-id", spec.ChainID,
 				"--keyring-backend", "test",
-				"--output-document", gentxPath,
+				"--output-document", filepath.Join(gentxDir, fmt.Sprintf("gentx-%d.json", node.GlobalSeq)),
 				"--min-self-delegation", "1",
 			); err != nil {
 				return fmt.Errorf("gentx for validator node %d: %w", node.GlobalSeq, err)
 			}
-			gentxPaths = append(gentxPaths, gentxPath)
 		}
 	}
 
@@ -1185,10 +1087,6 @@ func bootstrapNodesAndGenesis(ctx context.Context, spec messages.BenchmarkSpec, 
 	}
 	if leaderHome == "" {
 		return fmt.Errorf("validator leader not found")
-	}
-
-	for _, node := range nodes {
-		_ = node
 	}
 
 	type bulkCoin struct {
@@ -1253,23 +1151,6 @@ func bootstrapNodesAndGenesis(ctx context.Context, spec messages.BenchmarkSpec, 
 		"--home", leaderHome,
 	); err != nil {
 		return fmt.Errorf("bulk add genesis accounts: %w", err)
-	}
-
-	gentxDir, err := os.MkdirTemp("", "evm-benchmark-gentx-")
-	if err != nil {
-		return fmt.Errorf("create gentx dir: %w", err)
-	}
-	defer os.RemoveAll(gentxDir)
-
-	for i, p := range gentxPaths {
-		content, err := os.ReadFile(p)
-		if err != nil {
-			return fmt.Errorf("read gentx %s: %w", p, err)
-		}
-		dst := filepath.Join(gentxDir, fmt.Sprintf("gentx-%d.json", i))
-		if err := os.WriteFile(dst, content, 0o644); err != nil {
-			return fmt.Errorf("write gentx %s: %w", dst, err)
-		}
 	}
 
 	if _, err := chainCmd(ctx, spec.Binary, nil,
@@ -1531,14 +1412,11 @@ func bech32Address(globalSeq, index int, prefix, baseMnemonic string) (string, e
 	if err != nil {
 		return "", err
 	}
-	ethAddr := crypto.PubkeyToAddress(key.PublicKey)
-	fiveBit, err := bech32.ConvertBits(ethAddr.Bytes(), 8, 5, true)
-	if err != nil {
-		return "", fmt.Errorf("convert bits: %w", err)
-	}
-	return bech32.Encode(prefix, fiveBit)
+	return ethAddressToBech32(crypto.PubkeyToAddress(key.PublicKey), prefix)
 }
 
+// patchGenesisContractAuthAccount gives the test token an auth account, unless
+// genesis has one already.
 func patchGenesisContractAuthAccount(genesis []byte, prefix string) ([]byte, error) {
 	var doc map[string]interface{}
 	if err := json.Unmarshal(genesis, &doc); err != nil {
@@ -1554,23 +1432,14 @@ func patchGenesisContractAuthAccount(genesis []byte, prefix string) ([]byte, err
 		return nil, fmt.Errorf("genesis missing app_state.auth")
 	}
 
-	accounts, _ := authState["accounts"].([]interface{})
 	contractAddr, err := ethAddressToBech32(common.HexToAddress(erc20ContractAddress), prefix)
 	if err != nil {
 		return nil, err
 	}
-
+	accounts, _ := authState["accounts"].([]interface{})
 	for _, entry := range accounts {
-		m, ok := entry.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if addr, ok := m["address"].(string); ok && addr == contractAddr {
-			out, err := json.Marshal(doc)
-			if err != nil {
-				return nil, fmt.Errorf("encode genesis json: %w", err)
-			}
-			return out, nil
+		if m, ok := entry.(map[string]interface{}); ok && m["address"] == contractAddr {
+			return genesis, nil
 		}
 	}
 

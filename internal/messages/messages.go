@@ -20,7 +20,6 @@ type BenchmarkSpec struct {
 	DockerEnv                map[string]string      `yaml:"docker_env"`
 	PatchImage               PatchImageConfig       `yaml:"patch_image"`
 	DockerNetwork            string                 `yaml:"docker_network"`
-	DockerCreateNetwork      bool                   `yaml:"docker_create_network"`
 	ChainFamily              string                 `yaml:"chain_family"`
 	ChainConfig              string                 `yaml:"chain_config"`
 	ChainsConfigPath         string                 `yaml:"chains_config_path"`
@@ -33,8 +32,6 @@ type BenchmarkSpec struct {
 	Denom                    string                 `yaml:"denom"`
 	BaseMnemonic             string                 `yaml:"base_mnemonic"`
 	HostnameTemplate         string                 `yaml:"hostname_template"`
-	RPCURLTemplate           string                 `yaml:"rpc_url_template"`
-	TendermintURLTemplate    string                 `yaml:"tendermint_url_template"`
 	Validators               int                    `yaml:"validators"`
 	Fullnodes                int                    `yaml:"fullnodes"`
 	NumAccounts              int                    `yaml:"num_accounts"`
@@ -43,7 +40,6 @@ type BenchmarkSpec struct {
 	IdlePollIntervalSeconds  int                    `yaml:"idle_poll_interval_seconds"`
 	ChainHaltIntervalSeconds int                    `yaml:"chain_halt_interval_seconds"`
 	TxType                   TxType                 `yaml:"tx_type"`
-	BatchSize                int                    `yaml:"batch_size"`
 	EVMChainID               int64                  `yaml:"evm_chain_id"`
 	GasPriceWei              int64                  `yaml:"gas_price_wei"`
 	SimpleTransferGas        uint64                 `yaml:"simple_transfer_gas"`
@@ -134,12 +130,11 @@ type BenchmarkSpec struct {
 	// to bench.HotRecipient instead of back to the sender.
 	HotRecipientPercent int `yaml:"hot_recipient_percent"`
 
-	MinReadyHeight          int64 `yaml:"min_ready_height"`
-	PeerReadyTimeoutSeconds int   `yaml:"peer_ready_timeout_seconds"`
-	PreGenerateTxs          bool  `yaml:"pre_generate_txs"`
-	RunNodes                bool  `yaml:"run_nodes"`
-	ValidatorGenerateLoad   bool  `yaml:"validator_generate_load"`
-	BroadcastConcurrency    int   `yaml:"broadcast_concurrency"`
+	MinReadyHeight        int64 `yaml:"min_ready_height"`
+	PreGenerateTxs        bool  `yaml:"pre_generate_txs"`
+	RunNodes              bool  `yaml:"run_nodes"`
+	ValidatorGenerateLoad bool  `yaml:"validator_generate_load"`
+	BroadcastConcurrency  int   `yaml:"broadcast_concurrency"`
 	// Pause sending while more than this many transactions are pending.
 	// Negative never pauses (the setting for a benchmark, and load-independent);
 	// 0 uses bench.DefaultPendingWatermark (5000). A throttled sender caps how
@@ -183,8 +178,6 @@ type NodeTarget struct {
 	Home           string
 	HostRPCPort    int
 	HostEVMRPCPort int
-	RPCURL         string
-	TMRPCURL       string
 }
 
 type GenerateLayoutRequest struct {
@@ -225,13 +218,6 @@ type PatchImageResponse struct {
 	TargetDest string
 }
 
-type TPSDetail struct {
-	Height int64
-	Time   string
-	Txs    int
-	TPS    float64
-}
-
 type NodeRunResult struct {
 	GlobalSeq   int
 	TxsSent     int
@@ -252,6 +238,5 @@ type NodeRunResult struct {
 	DrainSeconds  int
 	PendingTxpool int64
 	TopTPS        []float64
-	TopTPSDetails []TPSDetail
 	StatsFile     string
 }

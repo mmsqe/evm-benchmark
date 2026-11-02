@@ -42,8 +42,6 @@ var rethPorts = portBlock{
 // blocks through the engine API.
 type rethRuntime struct{ devnetRuntime }
 
-func (rethRuntime) Name() string { return FamilyReth }
-
 // EnrichSpec points ERC-20 load at the token the genesis deploys, unless the
 // operator names their own (with its code in genesis_patch.alloc).
 func (rethRuntime) EnrichSpec(spec *messages.BenchmarkSpec) error {

@@ -70,8 +70,6 @@ var tempoShapeMinGas = map[string]uint64{
 // binaries from the tempo repo.
 type tempoRuntime struct{ devnetRuntime }
 
-func (tempoRuntime) Name() string { return FamilyTempo }
-
 // EnrichSpec applies Tempo-specific defaults. Tempo forbids native value
 // transfers and charges a ~271k intrinsic gas floor, so the generator must use
 // the ERC-20 (TIP-20) transaction shape with a sufficient gas limit.

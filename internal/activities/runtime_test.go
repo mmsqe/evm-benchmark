@@ -18,8 +18,8 @@ func TestResolveRuntimeDefaultsToCosmos(t *testing.T) {
 		if err != nil {
 			t.Fatalf("family %q: %v", family, err)
 		}
-		if chain.Name() != FamilyCosmos {
-			t.Errorf("family %q resolved to %s", family, chain.Name())
+		if _, ok := chain.(cosmosRuntime); !ok {
+			t.Errorf("family %q resolved to %T", family, chain)
 		}
 	}
 	if _, err := resolveRuntime(messages.BenchmarkSpec{ChainFamily: "bogus"}); err == nil {

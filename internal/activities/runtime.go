@@ -21,11 +21,9 @@ const (
 // turning a spec into a running network. Transaction generation, broadcast and
 // stats are family-agnostic and live in internal/bench.
 type ChainRuntime interface {
-	// Name returns the family identifier.
-	Name() string
-
-	// EnrichSpec fills spec fields from the chain profile before the layout is
-	// generated (chain id, denom, genesis patches, ...).
+	// EnrichSpec applies the family's defaults (transfer target, tx type) to a
+	// spec and rejects what the family cannot run. The activities that use the
+	// spec call it, since the workflow hands them the raw one.
 	EnrichSpec(spec *messages.BenchmarkSpec) error
 
 	// Bootstrap creates node homes, keys and genesis for the given targets —
@@ -103,11 +101,9 @@ func resolveRuntime(spec messages.BenchmarkSpec) (ChainRuntime, error) {
 // chain binary's own init/gentx/genesis commands.
 type cosmosRuntime struct{}
 
-func (cosmosRuntime) Name() string { return FamilyCosmos }
-
-func (cosmosRuntime) EnrichSpec(spec *messages.BenchmarkSpec) error {
-	return enrichGenesisPatchFromChainConfig(spec)
-}
+// EnrichSpec has nothing to add: the chain profile's genesis patch is merged
+// into the spec when the config is loaded, before it reaches the workflow.
+func (cosmosRuntime) EnrichSpec(*messages.BenchmarkSpec) error { return nil }
 
 func (cosmosRuntime) Bootstrap(ctx context.Context, spec messages.BenchmarkSpec, nodes []messages.NodeTarget) error {
 	return bootstrapNodesAndGenesis(ctx, spec, nodes)

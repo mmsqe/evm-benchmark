@@ -111,7 +111,7 @@ func main() {
 	}
 	ok := 0
 	for _, shape := range shapes {
-		if err := probeTx(ctx, client, *rpcURL, *globalSeq, *chainID, *mnemonic, shape.name, shape.value, shape.to, shape.gas); err != nil {
+		if err := probeTx(ctx, client, *rpcURL, *globalSeq, *chainID, *mnemonic, shape.value, shape.to, shape.gas); err != nil {
 			fmt.Printf("probe %-26s REJECTED: %v\n", shape.name, err)
 			continue
 		}
@@ -131,7 +131,7 @@ func main() {
 //
 // An empty `to` sends to self; otherwise `to` is called with an ERC-20
 // `transfer(self, 1)` payload.
-func probeTx(ctx context.Context, client *http.Client, rpcURL string, globalSeq int, chainID int64, mnemonic, name string, value *big.Int, to string, gas uint64) error {
+func probeTx(ctx context.Context, client *http.Client, rpcURL string, globalSeq int, chainID int64, mnemonic string, value *big.Int, to string, gas uint64) error {
 	key, err := keygen.DeterministicKey(globalSeq, 1, mnemonic)
 	if err != nil {
 		return err

@@ -337,8 +337,8 @@ func TestTempoRemoteProduceTxsStartsFromChainNonces(t *testing.T) {
 	})
 }
 
-// TestGenerateLayoutRemote: a remote layout points every node at the endpoint
-// and generates no devnet, so it needs neither tempo binary.
+// TestGenerateLayoutRemote: a remote layout generates no devnet, so it needs
+// neither tempo binary.
 func TestGenerateLayoutRemote(t *testing.T) {
 	chain := newFakeTempo()
 	spec := chain.serve(t)
@@ -349,8 +349,8 @@ func TestGenerateLayoutRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateLayout: %v", err)
 	}
-	if len(res.Nodes) != 1 || res.Nodes[0].RPCURL != spec.RemoteRPCURL {
-		t.Fatalf("nodes = %+v, want one node on %s", res.Nodes, spec.RemoteRPCURL)
+	if len(res.Nodes) != 1 {
+		t.Fatalf("nodes = %+v, want one", res.Nodes)
 	}
 	if _, err := os.Stat(devnetDir(spec)); !os.IsNotExist(err) {
 		t.Errorf("a devnet was generated for a remote run (stat err = %v)", err)
