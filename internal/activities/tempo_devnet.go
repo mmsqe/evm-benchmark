@@ -69,7 +69,7 @@ func generateTempoDevnet(ctx context.Context, spec messages.BenchmarkSpec, nodes
 		vals = append(vals, tempoDevnetValidator{
 			Moniker: nodeMoniker(node.GlobalSeq),
 			Host:    "127.0.0.1",
-			Port:    tempoBasePort(spec, node.GlobalSeq),
+			Port:    tempoPorts.base(spec.TempoBasePort, node.GlobalSeq),
 		})
 	}
 
@@ -333,7 +333,7 @@ type composeIPAM struct {
 // writeTempoCompose writes a single-network docker-compose.yaml for the
 // generated validators.
 func writeTempoCompose(spec messages.BenchmarkSpec, vals []tempoDevnetValidator, dockerIPs []string, dataDir string) error {
-	network := tempoDockerNetwork(spec)
+	network := cmp.Or(spec.TempoDockerNetwork, "tempo-devnet")
 	image := spec.TempoDockerImage
 	containerHTTP := tempoDockerConsensusPort + 4
 	containerWS := tempoDockerConsensusPort + 5

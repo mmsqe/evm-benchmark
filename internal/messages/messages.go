@@ -135,16 +135,11 @@ type BenchmarkSpec struct {
 	RunNodes              bool  `yaml:"run_nodes"`
 	ValidatorGenerateLoad bool  `yaml:"validator_generate_load"`
 	BroadcastConcurrency  int   `yaml:"broadcast_concurrency"`
-	// Pause sending while more than this many transactions are pending.
-	// Negative never pauses (the setting for a benchmark, and load-independent);
-	// 0 uses bench.DefaultPendingWatermark (5000). A throttled sender caps how
-	// deep a backlog the chain is given, so a chain that drains faster than the
-	// sender refills gets measured on the sender rather than on itself.
+	// Pause sending while more than this many transactions are pending. Negative
+	// never pauses; 0 uses bench.DefaultPendingWatermark.
 	BroadcastPendingWatermark int64 `yaml:"broadcast_pending_watermark"`
-	// Transactions per JSON-RPC request. 1 (default) is one HTTP round trip per
-	// transaction, which caps the sender near 50k tx/s on loopback — below what
-	// a fast chain executes, so the run measures submission instead. Batching
-	// removes that ceiling; the node must support JSON-RPC batch requests.
+	// Transactions per JSON-RPC request, 1 by default. Above 1 the node must
+	// support JSON-RPC batch requests.
 	BroadcastBatchSize int `yaml:"broadcast_batch_size"`
 	// How long one request may take. 10 (the default) suits a local node; a
 	// node that answers requests one at a time makes each wait for those ahead
@@ -180,19 +175,12 @@ type NodeTarget struct {
 	HostEVMRPCPort int
 }
 
-type GenerateLayoutRequest struct {
+// LayoutRequest is the input of GenerateLayout and LoadLayout.
+type LayoutRequest struct {
 	Spec BenchmarkSpec
 }
 
-type GenerateLayoutResponse struct {
-	Nodes []NodeTarget
-}
-
-type LoadLayoutRequest struct {
-	Spec BenchmarkSpec
-}
-
-type LoadLayoutResponse struct {
+type LayoutResponse struct {
 	Nodes []NodeTarget
 }
 
@@ -218,22 +206,15 @@ type PatchImageResponse struct {
 	TargetDest string
 }
 
+// NodeRunResult reports one node's run; its rates are bench.RunStats's.
 type NodeRunResult struct {
-	GlobalSeq   int
-	TxsSent     int
-	IncludedTxs int
-	// SustainedTPS is every included transaction over ActiveSeconds, the
-	// seconds of block production that carried the load. A run with few active
-	// seconds is bounded by the load, not the chain — quote it with that count.
-	// FullSecondTPS is the rate over whole seconds of production, excluding the
-	// partial first and last. Compare this across runs — SustainedTPS moves with
-	// where the load fell relative to the second boundary.
+	GlobalSeq     int
+	TxsSent       int
+	IncludedTxs   int
 	FullSecondTPS float64
 	FullSeconds   int
 	SustainedTPS  float64
 	ActiveSeconds int
-	// DrainTPS is the rate over the DrainSeconds whole seconds after the sender
-	// finished, see bench.RunStats.
 	DrainTPS      float64
 	DrainSeconds  int
 	PendingTxpool int64

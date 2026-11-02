@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -232,15 +233,9 @@ func buildTempoCalls(shape string, txIndex int, token, recipient common.Address,
 			{To: token, Data: tempotx.Approve(recipient, 1)},
 			{To: token, Data: tempotx.TransferFrom(recipient, recipient, 1)},
 		}
-	default: // self, hot, fresh, batch
-		calls := []tempotx.Call{{To: token, Data: tempotx.Transfer(recipient, 1)}}
-		if shape == "batch" {
-			batched := make([]tempotx.Call, batchCalls)
-			for i := range batched {
-				batched[i] = calls[0]
-			}
-			return batched
-		}
-		return calls
+	case "batch":
+		return slices.Repeat([]tempotx.Call{{To: token, Data: tempotx.Transfer(recipient, 1)}}, batchCalls)
+	default: // self, hot, fresh
+		return []tempotx.Call{{To: token, Data: tempotx.Transfer(recipient, 1)}}
 	}
 }

@@ -102,7 +102,7 @@ func runGen(args []string) {
 	}
 
 	act := &activities.Activity{}
-	res, err := act.GenerateLayout(context.Background(), messages.GenerateLayoutRequest{Spec: spec})
+	res, err := act.GenerateLayout(context.Background(), messages.LayoutRequest{Spec: spec})
 	if err != nil {
 		log.Fatalf("generate layout: %v", err)
 	}

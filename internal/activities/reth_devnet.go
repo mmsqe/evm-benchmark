@@ -164,15 +164,10 @@ func rethTokenBalanceSlot(owner common.Address) common.Hash {
 	return crypto.Keccak256Hash(common.LeftPadBytes(owner.Bytes(), 32), make([]byte, 32))
 }
 
-// rethProducerPort returns a port from the producer's (node 0's) block.
-func rethProducerPort(spec messages.BenchmarkSpec, offset int) int {
-	return rethPorts.base(spec.RethBasePort, 0) + offset
-}
-
 func rethProducerEnode(spec messages.BenchmarkSpec) string {
 	// An enode ID is the uncompressed public key without its 0x04 prefix.
 	id := hex.EncodeToString(crypto.FromECDSAPub(&rethProducerKey.PublicKey)[1:])
-	return fmt.Sprintf("enode://%s@127.0.0.1:%d", id, rethProducerPort(spec, rethP2PPortOffset))
+	return fmt.Sprintf("enode://%s@127.0.0.1:%d", id, rethPorts.base(spec.RethBasePort, 0)+rethP2PPortOffset)
 }
 
 // rethLauncher builds the node's `run.sh`. The validator is the dev block
@@ -223,7 +218,7 @@ func rethLauncher(spec messages.BenchmarkSpec, nodeCount int, node messages.Node
 			args = append(args, "--builder.gaslimit", strconv.FormatInt(spec.RethGasLimit, 10))
 		}
 	} else {
-		wsPort := rethProducerPort(spec, rethWSPortOffset)
+		wsPort := rethPorts.base(spec.RethBasePort, 0) + rethWSPortOffset
 		args = append(args,
 			"--trusted-peers", rethProducerEnode(spec),
 			"--debug.rpc-consensus-url", fmt.Sprintf("ws://127.0.0.1:%d", wsPort),

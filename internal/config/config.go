@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -254,71 +255,29 @@ func DeepMerge(dst, src map[string]interface{}) map[string]interface{} {
 }
 
 func applyDefaults(cfg *AppConfig) {
-	if cfg.Temporal.HostPort == "" {
-		cfg.Temporal.HostPort = "127.0.0.1:7233"
-	}
-	if cfg.Temporal.Namespace == "" {
-		cfg.Temporal.Namespace = "default"
-	}
-	if cfg.Temporal.TaskQueue == "" {
-		cfg.Temporal.TaskQueue = messages.DefaultTaskQueue
-	}
-	if cfg.Start.WorkflowID == "" {
-		cfg.Start.WorkflowID = "evm-benchmark"
-	}
+	cfg.Temporal.HostPort = cmp.Or(cfg.Temporal.HostPort, "127.0.0.1:7233")
+	cfg.Temporal.Namespace = cmp.Or(cfg.Temporal.Namespace, "default")
+	cfg.Temporal.TaskQueue = cmp.Or(cfg.Temporal.TaskQueue, messages.DefaultTaskQueue)
+	cfg.Start.WorkflowID = cmp.Or(cfg.Start.WorkflowID, "evm-benchmark")
 
 	spec := &cfg.Benchmark
-	if spec.RunnerType == "" {
-		spec.RunnerType = "local"
-	}
-	if spec.PatchImage.FromImage == "" {
-		spec.PatchImage.FromImage = spec.DockerImage
-	}
-	if spec.PatchImage.Dest == "" {
-		spec.PatchImage.Dest = "/data"
-	}
-	if spec.DockerNetwork == "" {
-		spec.DockerNetwork = "evm-benchmark"
-	}
-	if spec.HostnameTemplate == "" {
-		spec.HostnameTemplate = "testplan-%d"
-	}
-	if spec.ChainID == "" {
-		spec.ChainID = "evm-benchmark-1"
-	}
-	if spec.AddressPrefix == "" {
-		spec.AddressPrefix = "mantra"
-	}
-	if spec.Denom == "" {
-		spec.Denom = "amantra"
-	}
-	if spec.Validators == 0 {
-		spec.Validators = 1
-	}
-	if spec.Fullnodes < 0 {
-		spec.Fullnodes = 0
-	}
-	if spec.NumAccounts == 0 {
-		spec.NumAccounts = 100
-	}
-	if spec.NumTxs == 0 {
-		spec.NumTxs = 20
-	}
-	if spec.NumIdle == 0 {
-		spec.NumIdle = 20
-	}
-	if spec.BroadcastConcurrency == 0 {
-		spec.BroadcastConcurrency = 32
-	}
-	if spec.BroadcastRequestTimeoutSeconds == 0 {
-		spec.BroadcastRequestTimeoutSeconds = 10
-	}
-	if spec.IdlePollIntervalSeconds == 0 {
-		spec.IdlePollIntervalSeconds = 5
-	}
-	if spec.ChainHaltIntervalSeconds == 0 {
-		spec.ChainHaltIntervalSeconds = 120
-	}
+	spec.RunnerType = cmp.Or(spec.RunnerType, "local")
+	spec.PatchImage.FromImage = cmp.Or(spec.PatchImage.FromImage, spec.DockerImage)
+	spec.PatchImage.Dest = cmp.Or(spec.PatchImage.Dest, "/data")
+	spec.DockerNetwork = cmp.Or(spec.DockerNetwork, "evm-benchmark")
+	spec.HostnameTemplate = cmp.Or(spec.HostnameTemplate, "testplan-%d")
+	spec.ChainID = cmp.Or(spec.ChainID, "evm-benchmark-1")
+	spec.AddressPrefix = cmp.Or(spec.AddressPrefix, "mantra")
+	spec.Denom = cmp.Or(spec.Denom, "amantra")
+	spec.Validators = cmp.Or(spec.Validators, 1)
+	spec.Fullnodes = max(spec.Fullnodes, 0)
+	spec.NumAccounts = cmp.Or(spec.NumAccounts, 100)
+	spec.NumTxs = cmp.Or(spec.NumTxs, 20)
+	spec.NumIdle = cmp.Or(spec.NumIdle, 20)
+	spec.BroadcastConcurrency = cmp.Or(spec.BroadcastConcurrency, 32)
+	spec.BroadcastRequestTimeoutSeconds = cmp.Or(spec.BroadcastRequestTimeoutSeconds, 10)
+	spec.IdlePollIntervalSeconds = cmp.Or(spec.IdlePollIntervalSeconds, 5)
+	spec.ChainHaltIntervalSeconds = cmp.Or(spec.ChainHaltIntervalSeconds, 120)
 	// Default per family: Tempo rejects native value transfers outright, so
 	// the cosmos default would be an immediate error there.
 	if spec.TxType == "" {
@@ -328,18 +287,10 @@ func applyDefaults(cfg *AppConfig) {
 			spec.TxType = messages.SimpleTransferTx
 		}
 	}
-	if spec.EVMChainID == 0 {
-		spec.EVMChainID = 7888
-	}
-	if spec.GasPriceWei == 0 {
-		spec.GasPriceWei = 1_000_000_000
-	}
-	if spec.SimpleTransferGas == 0 {
-		spec.SimpleTransferGas = 21_000
-	}
-	if spec.ERC20TransferGas == 0 {
-		spec.ERC20TransferGas = 51_630
-	}
+	spec.EVMChainID = cmp.Or(spec.EVMChainID, 7888)
+	spec.GasPriceWei = cmp.Or(spec.GasPriceWei, 1_000_000_000)
+	spec.SimpleTransferGas = cmp.Or(spec.SimpleTransferGas, 21_000)
+	spec.ERC20TransferGas = cmp.Or(spec.ERC20TransferGas, 51_630)
 	// This address is the cosmos test token. Other chain families supply their
 	// own default from their runtime (Tempo uses its genesis TIP-20 fee token),
 	// so leave the field empty for them rather than pointing every transaction
@@ -347,15 +298,9 @@ func applyDefaults(cfg *AppConfig) {
 	if spec.ERC20ContractAddress == "" && (spec.ChainFamily == "" || spec.ChainFamily == "cosmos") {
 		spec.ERC20ContractAddress = "0x1000000000000000000000000000000000000000"
 	}
-	if spec.RPCPort == 0 {
-		spec.RPCPort = 26657
-	}
-	if spec.EVMRPCPort == 0 {
-		spec.EVMRPCPort = 8545
-	}
-	if spec.MinReadyHeight == 0 {
-		spec.MinReadyHeight = 3
-	}
+	spec.RPCPort = cmp.Or(spec.RPCPort, 26657)
+	spec.EVMRPCPort = cmp.Or(spec.EVMRPCPort, 8545)
+	spec.MinReadyHeight = cmp.Or(spec.MinReadyHeight, 3)
 }
 
 func validate(cfg AppConfig, runtimeValidation bool) error {

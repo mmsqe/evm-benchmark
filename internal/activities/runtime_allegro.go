@@ -100,8 +100,3 @@ func (a allegroRuntime) PreStartCheck(spec messages.BenchmarkSpec, target messag
 func (allegroRuntime) EVMRPCPort(spec messages.BenchmarkSpec, globalSeq int) int {
 	return allegroPorts.rpc(spec.AllegroBasePort, globalSeq)
 }
-
-// allegroBasePort returns the base of a node's 4-port block.
-func allegroBasePort(spec messages.BenchmarkSpec, globalSeq int) int {
-	return allegroPorts.base(spec.AllegroBasePort, globalSeq)
-}

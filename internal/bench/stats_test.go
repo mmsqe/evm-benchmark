@@ -53,7 +53,7 @@ func TestBucketTPSIsBlockRateIndependent(t *testing.T) {
 					t.Errorf("second %s = %d txs at %.0f tx/s, want %d", b.At, b.Txs, b.Rate, want)
 				}
 			}
-			if got := sustainedTPS(buckets); got != want {
+			if got := meanTPS(buckets); got != want {
 				t.Errorf("sustained = %.0f, want %d", got, want)
 			}
 			if got := medianTPS(buckets); got != want {
@@ -81,7 +81,7 @@ func TestBucketTPSExcludesIdleEdges(t *testing.T) {
 	if buckets[0].Txs != 1000 || buckets[1].Txs != 600 {
 		t.Errorf("bucket rates = %d, %d; want 1000, 600", buckets[0].Txs, buckets[1].Txs)
 	}
-	if got := sustainedTPS(buckets); got != 800 {
+	if got := meanTPS(buckets); got != 800 {
 		t.Errorf("sustained = %.0f, want 800 (1600 txs over 2 active seconds)", got)
 	}
 	// Head is what the report attributes the peak second to.
@@ -108,7 +108,7 @@ func TestBucketTPSKeepsInteriorStalls(t *testing.T) {
 	if buckets[1].Txs != 0 {
 		t.Errorf("stalled second = %d tx/s, want 0", buckets[1].Txs)
 	}
-	if got := sustainedTPS(buckets); got != 1200 {
+	if got := meanTPS(buckets); got != 1200 {
 		t.Errorf("sustained = %.0f, want 1200 (3600 txs over 3 seconds, stall included)", got)
 	}
 	if got := medianTPS(buckets); got != 1800 {
@@ -133,7 +133,7 @@ func TestBucketTPSCountsSecondsWithoutBlocks(t *testing.T) {
 	if b := buckets[1]; b.Txs != 0 || b.Head != 0 || !b.At.Equal(base.Add(time.Second)) {
 		t.Errorf("second without a block = %+v, want an empty bucket at %s", b, base.Add(time.Second))
 	}
-	if got := sustainedTPS(buckets); got != 80 {
+	if got := meanTPS(buckets); got != 80 {
 		t.Errorf("sustained = %.0f, want 80 (800 txs over 10 seconds)", got)
 	}
 	if got := fullSecondTPS(buckets); got != 75 {
@@ -173,7 +173,7 @@ func TestBucketTPSEmpty(t *testing.T) {
 	if got := bucketTPS(blocksAt(1, base, 3, 0)); got != nil {
 		t.Errorf("a run that included nothing has no active window, got %v", got)
 	}
-	if got := sustainedTPS(nil); got != 0 {
+	if got := meanTPS(nil); got != 0 {
 		t.Errorf("sustained on no buckets = %v, want 0", got)
 	}
 }
@@ -225,8 +225,8 @@ func TestFullSecondTPSIgnoresPartialEdges(t *testing.T) {
 		t.Errorf("late-aligned full-second rate = %.0f, want 60000", got)
 	}
 	// Same production, but sustained cannot tell the two apart from a real change.
-	if sustainedTPS(early) != sustainedTPS(late) {
-		t.Fatalf("fixture broken: %v vs %v", sustainedTPS(early), sustainedTPS(late))
+	if meanTPS(early) != meanTPS(late) {
+		t.Fatalf("fixture broken: %v vs %v", meanTPS(early), meanTPS(late))
 	}
 	// A run with no interior second has no comparable rate at all.
 	if got := fullSecondTPS(bucketTPS(mk(1000, 2000))); got != 0 {

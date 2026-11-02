@@ -31,12 +31,8 @@ type Call struct {
 	Data  []byte
 }
 
-// Tx is the subset of the 0x76 envelope the benchmark produces: sender-signed,
-// no fee payer, access list or key authorization.
-//
-// FeeToken is always encoded (20 bytes): a zero value is the zero-address fee
-// token, not an absent one. The benchmark always sets a real fee token, so the
-// "no fee token" (native gas) case is intentionally unrepresented.
+// Tx is the 0x76 envelope's fields. FeeToken is always encoded (20 bytes): a
+// zero value is the zero-address fee token, not an absent one.
 type Tx struct {
 	ChainID              uint64
 	MaxPriorityFeePerGas uint64
@@ -80,7 +76,7 @@ func Hash(raw string) string {
 		return ""
 	}
 	if len(b) > 1 && b[0] == txTypeByte && b[len(b)-1] < 27 {
-		b = append(append([]byte{}, b[:len(b)-1]...), b[len(b)-1]+27)
+		b[len(b)-1] += 27 // b is Decode's own copy
 	}
 	return crypto.Keccak256Hash(b).Hex()
 }

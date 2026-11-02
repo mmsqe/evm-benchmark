@@ -3,9 +3,11 @@ package activities
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -16,7 +18,6 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -44,89 +45,75 @@ const (
 	erc20ContractAddress  = "0x1000000000000000000000000000000000000000"
 )
 
-func (a *Activity) GenerateLayout(ctx context.Context, req messages.GenerateLayoutRequest) (messages.GenerateLayoutResponse, error) {
+func (a *Activity) GenerateLayout(ctx context.Context, req messages.LayoutRequest) (messages.LayoutResponse, error) {
 	spec := req.Spec
 	chain, err := resolveRuntime(spec)
 	if err != nil {
-		return messages.GenerateLayoutResponse{}, err
+		return messages.LayoutResponse{}, err
 	}
 	if err := chain.Validate(spec); err != nil {
-		return messages.GenerateLayoutResponse{}, err
+		return messages.LayoutResponse{}, err
 	}
 	if err := chain.EnrichSpec(&spec); err != nil {
-		return messages.GenerateLayoutResponse{}, err
+		return messages.LayoutResponse{}, err
 	}
-	nodes := make([]messages.NodeTarget, 0, spec.Validators+spec.Fullnodes)
 
 	if err := os.MkdirAll(spec.DataDir, 0o755); err != nil {
-		return messages.GenerateLayoutResponse{}, fmt.Errorf("create data dir: %w", err)
+		return messages.LayoutResponse{}, fmt.Errorf("create data dir: %w", err)
 	}
 	if spec.OutDir != "" {
 		if err := os.MkdirAll(spec.OutDir, 0o755); err != nil {
-			return messages.GenerateLayoutResponse{}, fmt.Errorf("create output dir: %w", err)
+			return messages.LayoutResponse{}, fmt.Errorf("create output dir: %w", err)
 		}
 	}
 
-	mkNode := func(group string, groupSeq, globalSeq int) messages.NodeTarget {
-		hostname := fmt.Sprintf(spec.HostnameTemplate, globalSeq)
-		home := filepath.Join(spec.DataDir, group, fmt.Sprintf("%d", groupSeq))
-		hostRPCPort := spec.RPCPort + globalSeq
-		hostEVMRPCPort := spec.EVMRPCPort + globalSeq
-
-		return messages.NodeTarget{
-			GlobalSeq:      globalSeq,
+	nodes := make([]messages.NodeTarget, spec.Validators+spec.Fullnodes)
+	for i := range nodes {
+		group, groupSeq := "validators", i
+		if i >= spec.Validators {
+			group, groupSeq = "fullnodes", i-spec.Validators
+		}
+		nodes[i] = messages.NodeTarget{
+			GlobalSeq:      i,
 			Group:          group,
 			GroupSeq:       groupSeq,
-			Hostname:       hostname,
-			Home:           home,
-			HostRPCPort:    hostRPCPort,
-			HostEVMRPCPort: hostEVMRPCPort,
+			Hostname:       fmt.Sprintf(spec.HostnameTemplate, i),
+			Home:           filepath.Join(spec.DataDir, group, strconv.Itoa(groupSeq)),
+			HostRPCPort:    spec.RPCPort + i,
+			HostEVMRPCPort: spec.EVMRPCPort + i,
 		}
-	}
-
-	for i := 0; i < spec.Validators; i++ {
-		n := mkNode("validators", i, i)
-		if err := os.MkdirAll(n.Home, 0o755); err != nil {
-			return messages.GenerateLayoutResponse{}, fmt.Errorf("create validator home: %w", err)
+		if err := os.MkdirAll(nodes[i].Home, 0o755); err != nil {
+			return messages.LayoutResponse{}, fmt.Errorf("create node home: %w", err)
 		}
-		nodes = append(nodes, n)
-	}
-	for i := 0; i < spec.Fullnodes; i++ {
-		globalSeq := i + spec.Validators
-		n := mkNode("fullnodes", i, globalSeq)
-		if err := os.MkdirAll(n.Home, 0o755); err != nil {
-			return messages.GenerateLayoutResponse{}, fmt.Errorf("create fullnode home: %w", err)
-		}
-		nodes = append(nodes, n)
 	}
 
 	if err := chain.Bootstrap(ctx, spec, nodes); err != nil {
-		return messages.GenerateLayoutResponse{}, err
+		return messages.LayoutResponse{}, err
 	}
 
 	if err := writeJSON(filepath.Join(spec.DataDir, "config.json"), spec); err != nil {
-		return messages.GenerateLayoutResponse{}, err
+		return messages.LayoutResponse{}, err
 	}
 	if err := writeJSON(filepath.Join(spec.DataDir, "nodes.json"), nodes); err != nil {
-		return messages.GenerateLayoutResponse{}, err
+		return messages.LayoutResponse{}, err
 	}
-	return messages.GenerateLayoutResponse{Nodes: nodes}, nil
+	return messages.LayoutResponse{Nodes: nodes}, nil
 }
 
-func (a *Activity) LoadLayout(_ context.Context, req messages.LoadLayoutRequest) (messages.LoadLayoutResponse, error) {
+func (a *Activity) LoadLayout(_ context.Context, req messages.LayoutRequest) (messages.LayoutResponse, error) {
 	if req.Spec.OutDir != "" {
 		if err := os.MkdirAll(req.Spec.OutDir, 0o755); err != nil {
-			return messages.LoadLayoutResponse{}, fmt.Errorf("create output dir: %w", err)
+			return messages.LayoutResponse{}, fmt.Errorf("create output dir: %w", err)
 		}
 	}
 
 	nodesPath := filepath.Join(req.Spec.DataDir, "nodes.json")
 	var nodes []messages.NodeTarget
 	if err := readJSON(nodesPath, &nodes); err != nil {
-		return messages.LoadLayoutResponse{}, fmt.Errorf("load existing node layout %s: %w", nodesPath, err)
+		return messages.LayoutResponse{}, fmt.Errorf("load existing node layout %s: %w", nodesPath, err)
 	}
 	if len(nodes) == 0 {
-		return messages.LoadLayoutResponse{}, fmt.Errorf("existing node layout %s is empty", nodesPath)
+		return messages.LayoutResponse{}, fmt.Errorf("existing node layout %s is empty", nodesPath)
 	}
 
 	for _, n := range nodes {
@@ -135,11 +122,11 @@ func (a *Activity) LoadLayout(_ context.Context, req messages.LoadLayoutRequest)
 			continue
 		}
 		if err := patchConfigToml(n.Home, nodes, req.Spec); err != nil {
-			return messages.LoadLayoutResponse{}, fmt.Errorf("refresh node config for %s: %w", n.Home, err)
+			return messages.LayoutResponse{}, fmt.Errorf("refresh node config for %s: %w", n.Home, err)
 		}
 	}
 
-	return messages.LoadLayoutResponse{Nodes: nodes}, nil
+	return messages.LayoutResponse{Nodes: nodes}, nil
 }
 
 func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequest) (int, error) {
@@ -177,18 +164,13 @@ func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequ
 	}
 	defer txFile.Close()
 
-	writer := bufio.NewWriterSize(txFile, 1<<20)
-	if _, err := writer.WriteString("["); err != nil {
-		return 0, fmt.Errorf("write tx json header: %w", err)
-	}
-	first := true
+	writer := bufio.NewWriterSize(txFile, 1<<20) // write errors surface at the flush
+	writer.WriteString("[")
+	separator := ""
 
 	lastHeartbeat := time.Now()
 	lastProgressLog := time.Now()
-	progressStep := req.Spec.NumAccounts / 20
-	if progressStep < 1 {
-		progressStep = 1
-	}
+	progressStep := max(req.Spec.NumAccounts/20, 1)
 	txCount, err := bench.GenerateSignedTxsStream(req.Spec, req.Target.GlobalSeq, func(done, total int) {
 		if done == total || done == 1 || time.Since(lastHeartbeat) >= 15*time.Second {
 			activity.RecordHeartbeat(ctx, map[string]int{"accounts_done": done, "accounts_total": total})
@@ -200,28 +182,15 @@ func (a *Activity) GenerateTxs(ctx context.Context, req messages.GenerateTxsRequ
 			lastProgressLog = time.Now()
 		}
 	}, func(raw string) error {
-		if !first {
-			if _, err := writer.WriteString(","); err != nil {
-				return fmt.Errorf("write tx separator: %w", err)
-			}
-		}
-		first = false
-		encoded, err := json.Marshal(raw)
-		if err != nil {
-			return fmt.Errorf("encode tx: %w", err)
-		}
-		if _, err := writer.Write(encoded); err != nil {
-			return fmt.Errorf("write tx: %w", err)
-		}
-		return nil
+		_, err := fmt.Fprintf(writer, "%s%q", separator, raw) // hex needs no JSON escaping
+		separator = ","
+		return err
 	})
 	if err != nil {
 		return 0, err
 	}
 
-	if _, err := writer.WriteString("]"); err != nil {
-		return 0, fmt.Errorf("write tx json trailer: %w", err)
-	}
+	writer.WriteString("]")
 	if err := writer.Flush(); err != nil {
 		return 0, fmt.Errorf("flush tx file: %w", err)
 	}
@@ -342,10 +311,7 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 	if err := chain.EnrichSpec(&spec); err != nil {
 		return messages.NodeRunResult{}, err
 	}
-	broadcastConcurrency := spec.BroadcastConcurrency
-	if broadcastConcurrency < 1 {
-		broadcastConcurrency = 1
-	}
+	spec.BroadcastConcurrency = max(spec.BroadcastConcurrency, 1)
 	target := req.Target
 	if target.Group == "validators" && !spec.ValidatorGenerateLoad {
 		return messages.NodeRunResult{GlobalSeq: target.GlobalSeq}, nil
@@ -358,28 +324,6 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 	}
 
 	containerName := ""
-	dockerImage := strings.TrimSpace(spec.DockerImage)
-	if strings.TrimSpace(req.DockerImageOverride) != "" {
-		dockerImage = strings.TrimSpace(req.DockerImageOverride)
-	}
-	containerHome := path.Join("/data", target.Group, fmt.Sprintf("%d", target.GroupSeq))
-	usePatchedImageLayout := false
-	if spec.RunnerType == "docker" && spec.SkipGenerateLayout {
-		// Reuse pre-generated layout already embedded in the docker image.
-		usePatchedImageLayout = true
-	}
-	if strings.TrimSpace(req.DockerImageOverride) != "" {
-		usePatchedImageLayout = true
-	}
-	if spec.RunnerType == "docker" && !usePatchedImageLayout {
-		// If host-side node home isn't present, assume docker image already contains
-		// the prepared layout under /data/<group>/<seq> (patchimage flow).
-		hostGenesisPath := filepath.Join(target.Home, "config", "genesis.json")
-		_, err := os.Stat(hostGenesisPath)
-		if err != nil {
-			usePatchedImageLayout = true
-		}
-	}
 	if err := chain.Validate(spec); err != nil {
 		return messages.NodeRunResult{}, err
 	}
@@ -397,10 +341,11 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 			}
 
 			containerName = fmt.Sprintf("evm-benchmark-%d", target.GlobalSeq)
-			binaryInImage := spec.Binary
-			if strings.Contains(spec.Binary, "/") {
-				binaryInImage = path.Base(spec.Binary)
-			}
+			containerHome := path.Join("/data", target.Group, fmt.Sprintf("%d", target.GroupSeq))
+			// The node home is mounted from the host unless the layout is in the
+			// image already: patched in, reused, or never generated here.
+			_, statErr := os.Stat(filepath.Join(target.Home, "config", "genesis.json"))
+			mountHome := req.DockerImageOverride == "" && !spec.SkipGenerateLayout && statErr == nil
 
 			dockerArgs := []string{"run", "-d"}
 			if !spec.DockerKeepContainers {
@@ -413,34 +358,23 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 				"-p", fmt.Sprintf("%d:26657", target.HostRPCPort),
 				"-p", fmt.Sprintf("%d:8545", target.HostEVMRPCPort),
 			)
-			if !usePatchedImageLayout {
+			if mountHome {
 				dockerArgs = append(dockerArgs, "-v", fmt.Sprintf("%s:%s", target.Home, containerHome))
 			}
 			for _, volume := range spec.DockerVolumes {
-				volume = strings.TrimSpace(volume)
-				if volume == "" {
-					continue
+				if volume = strings.TrimSpace(volume); volume != "" {
+					dockerArgs = append(dockerArgs, "-v", volume)
 				}
-				dockerArgs = append(dockerArgs, "-v", volume)
 			}
-			if len(spec.DockerEnv) > 0 {
-				keys := make([]string, 0, len(spec.DockerEnv))
-				for k := range spec.DockerEnv {
-					keys = append(keys, k)
-				}
-				sort.Strings(keys)
-				for _, k := range keys {
-					dockerArgs = append(dockerArgs, "-e", fmt.Sprintf("%s=%s", k, spec.DockerEnv[k]))
-				}
+			for _, k := range slices.Sorted(maps.Keys(spec.DockerEnv)) {
+				dockerArgs = append(dockerArgs, "-e", fmt.Sprintf("%s=%s", k, spec.DockerEnv[k]))
 			}
 			dockerArgs = append(dockerArgs,
-				dockerImage,
-				"/bin/"+binaryInImage,
+				cmp.Or(req.DockerImageOverride, spec.DockerImage),
+				"/bin/"+path.Base(spec.Binary),
 				"start", "--home", containerHome,
 			)
-			for _, bindArg := range dockerDefaultBindArgs(spec.StartArgs) {
-				dockerArgs = append(dockerArgs, bindArg)
-			}
+			dockerArgs = append(dockerArgs, dockerDefaultBindArgs(spec.StartArgs)...)
 			if strings.TrimSpace(spec.ChainID) != "" {
 				dockerArgs = append(dockerArgs, "--chain-id", spec.ChainID)
 			}
@@ -492,32 +426,34 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 		}
 	}
 
-	host := "127.0.0.1"
-	rpcPort := spec.RPCPort
-	if spec.RunnerType == "docker" {
-		rpcPort = target.HostRPCPort
-	}
-	evmPort := chain.EVMRPCPort(spec, target.GlobalSeq)
-
-	if chain.HasConsensusRPC() {
-		if err := bench.WaitForPort(ctx, host, rpcPort, 2*time.Minute); err != nil {
-			if spec.RunnerType == "docker" {
-				if logPath, dumpErr := dumpDockerLogs(spec, target, containerName, "startup-rpc"); dumpErr == nil {
-					return messages.NodeRunResult{}, fmt.Errorf("wait consensus rpc: %w (docker logs: %s)", err, logPath)
-				}
+	// waitPort gives up on a port with the container's log or the node's exit
+	// as the cause.
+	waitPort := func(port int, what, logName string) error {
+		err := bench.WaitForPort(ctx, "127.0.0.1", port, 2*time.Minute)
+		if err == nil {
+			return nil
+		}
+		if spec.RunnerType == "docker" {
+			if logPath, dumpErr := dumpDockerLogs(spec, target, containerName, logName); dumpErr == nil {
+				return fmt.Errorf("wait %s: %w (docker logs: %s)", what, err, logPath)
 			}
-			return messages.NodeRunResult{}, withCause(ctx, fmt.Errorf("wait consensus rpc: %w", err))
+		}
+		return withCause(ctx, fmt.Errorf("wait %s: %w", what, err))
+	}
+	if chain.HasConsensusRPC() {
+		rpcPort := spec.RPCPort
+		if spec.RunnerType == "docker" {
+			rpcPort = target.HostRPCPort
+		}
+		if err := waitPort(rpcPort, "consensus rpc", "startup-rpc"); err != nil {
+			return messages.NodeRunResult{}, err
 		}
 	}
+	evmPort := chain.EVMRPCPort(spec, target.GlobalSeq)
 	// A remote endpoint has no local port; doRun's ready-height check covers it.
 	if spec.RemoteRPCURL == "" {
-		if err := bench.WaitForPort(ctx, host, evmPort, 2*time.Minute); err != nil {
-			if spec.RunnerType == "docker" {
-				if logPath, dumpErr := dumpDockerLogs(spec, target, containerName, "startup-evm-rpc"); dumpErr == nil {
-					return messages.NodeRunResult{}, fmt.Errorf("wait evm rpc: %w (docker logs: %s)", err, logPath)
-				}
-			}
-			return messages.NodeRunResult{}, withCause(ctx, fmt.Errorf("wait evm rpc: %w", err))
+		if err := waitPort(evmPort, "evm rpc", "startup-evm-rpc"); err != nil {
+			return messages.NodeRunResult{}, err
 		}
 	}
 
@@ -527,7 +463,7 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 		ForceAttemptHTTP2:     false,
 		MaxIdleConns:          256,
 		MaxIdleConnsPerHost:   128,
-		MaxConnsPerHost:       broadcastConcurrency,
+		MaxConnsPerHost:       spec.BroadcastConcurrency,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
@@ -539,7 +475,6 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 		rpcURL = spec.RemoteRPCURL
 	}
 
-	spec.BroadcastConcurrency = broadcastConcurrency
 	res, err := doRun(ctx, client, spec, target, rpcURL, txs)
 	if reporter, ok := chain.(metricsReporter); ok && err == nil && spec.StartNode {
 		err = reportNodeMetrics(ctx, client, reporter, spec, target, res.StatsFile)
@@ -575,46 +510,27 @@ func doRun(
 		if err != nil {
 			logger.Warn("dynamic gas price estimate failed", "node", target.GlobalSeq, "error", err, "fallback_gas_price_wei", spec.GasPriceWei)
 		} else {
-			// Apply 20% increase to reduce underpriced rejections under bursty load.
-			dynamic := (suggested * 12) / 10
-			if dynamic < suggested {
-				dynamic = suggested
-			}
-
-			effective := dynamic
-			if effective < spec.GasPriceWei {
-				effective = spec.GasPriceWei
-			}
-
-			if effective != spec.GasPriceWei {
-				// Transactions produced by a chain-specific generator cannot be
-				// re-signed here: the legacy signer would silently replace a
-				// native envelope with a legacy one. Those transactions carry an
-				// EIP-1559 style max fee instead, which already absorbs base-fee
-				// movement, so only the built-in signer needs regenerating.
-				if runtimeGeneratedTxs(spec) {
-					logger.Info(
-						"skipping gas-price regeneration for runtime-generated native txs",
-						"node", target.GlobalSeq,
-						"suggested_gas_price_wei", suggested,
-						"signed_max_fee_per_gas", spec.GasPriceWei,
-					)
-					if effective > spec.GasPriceWei {
-						logger.Warn(
-							"suggested gas price exceeds the max fee these txs were signed with; they may be rejected as underpriced",
-							"node", target.GlobalSeq,
-							"suggested_gas_price_wei", effective,
-							"signed_max_fee_per_gas", spec.GasPriceWei,
-						)
-					}
-				} else {
-					spec.GasPriceWei = effective
-					regenerated, genErr := bench.GenerateSignedTxs(spec, target.GlobalSeq)
-					if genErr != nil {
-						return messages.NodeRunResult{}, fmt.Errorf("regenerate txs with dynamic gas price: %w", genErr)
-					}
-					txs = regenerated
+			// 20% over the suggestion, so bursty load is not refused as underpriced.
+			effective := max(suggested*12/10, spec.GasPriceWei)
+			switch {
+			case effective == spec.GasPriceWei:
+			case runtimeGeneratedTxs(spec):
+				// The legacy signer would replace a native envelope with a legacy
+				// one. Native txs carry an EIP-1559 style max fee, which absorbs
+				// base-fee movement up to that max.
+				logger.Warn(
+					"suggested gas price exceeds the max fee these txs were signed with; they may be rejected as underpriced",
+					"node", target.GlobalSeq,
+					"suggested_gas_price_wei", effective,
+					"signed_max_fee_per_gas", spec.GasPriceWei,
+				)
+			default:
+				spec.GasPriceWei = effective
+				regenerated, genErr := bench.GenerateSignedTxs(spec, target.GlobalSeq)
+				if genErr != nil {
+					return messages.NodeRunResult{}, fmt.Errorf("regenerate txs with dynamic gas price: %w", genErr)
 				}
+				txs = regenerated
 			}
 
 			logger.Info("using runtime gas price", "node", target.GlobalSeq, "suggested_gas_price_wei", suggested, "effective_gas_price_wei", spec.GasPriceWei)
@@ -690,62 +606,52 @@ func doRun(
 		return messages.NodeRunResult{}, fmt.Errorf("create stats log: %w", err)
 	}
 	defer statsFile.Close()
+	w := bufio.NewWriter(statsFile) // writes are checked once, at the flush
 
 	// Written before the block stats so the two rates sit together in the file:
 	// an inclusion rate at or below the send rate, with the pool never deep,
 	// means the run measured submission rather than execution.
-	if _, err := fmt.Fprintf(statsFile,
+	fmt.Fprintf(w,
 		"send_summary sent=%d seconds=%.2f rate=%.0f max_pending=%d rejected=%d failed=%d req_p50=%.2fs req_p95=%.2fs req_max=%.2fs\n",
 		sendStats.Sent, sendStats.Duration.Seconds(), sendStats.Rate(), sendStats.MaxPending,
 		sendStats.Rejected, sendStats.Failed, sendStats.ReqP50.Seconds(), sendStats.ReqP95.Seconds(),
-		sendStats.ReqMax.Seconds()); err != nil {
-		return messages.NodeRunResult{}, fmt.Errorf("write send summary: %w", err)
-	}
+		sendStats.ReqMax.Seconds())
 	if sendStats.Failed > 0 {
-		if _, err := fmt.Fprintf(statsFile,
+		fmt.Fprintf(w,
 			"send_warning %d transactions were in requests the node never answered (broadcast_request_timeout_seconds=%d); "+
 				"those it admitted anyway are counted below, the rest are missing.\n",
-			sendStats.Failed, spec.BroadcastRequestTimeoutSeconds); err != nil {
-			return messages.NodeRunResult{}, fmt.Errorf("write send warning: %w", err)
-		}
+			sendStats.Failed, spec.BroadcastRequestTimeoutSeconds)
 	}
 	reasons := slices.Collect(maps.Keys(sendStats.RejectReasons))
 	slices.SortFunc(reasons, func(a, b string) int { return sendStats.RejectReasons[b] - sendStats.RejectReasons[a] })
 	for _, msg := range reasons {
-		if _, err := fmt.Fprintf(statsFile, "send_reject count=%d reason=%q\n", sendStats.RejectReasons[msg], msg); err != nil {
-			return messages.NodeRunResult{}, fmt.Errorf("write send rejects: %w", err)
-		}
+		fmt.Fprintf(w, "send_reject count=%d reason=%q\n", sendStats.RejectReasons[msg], msg)
 	}
 	if sendStats.PoolStalled {
-		if _, err := fmt.Fprintf(statsFile,
+		fmt.Fprint(w,
 			"send_warning the pool stopped draining above the watermark, so the rest was sent without waiting: "+
-				"the node may be holding transactions it never forwards.\n"); err != nil {
-			return messages.NodeRunResult{}, fmt.Errorf("write send warning: %w", err)
-		}
+				"the node may be holding transactions it never forwards.\n")
 	}
 	if sendStats.PoolUnknown && sendStats.Sent > 0 {
-		if _, err := fmt.Fprintf(statsFile,
+		fmt.Fprint(w,
 			"send_warning the pool was never read (no txpool_status, or too small a load to sample), so "+
-				"whether the chain ever fell behind the sender is unknown: this rate is a lower bound.\n"); err != nil {
-			return messages.NodeRunResult{}, fmt.Errorf("write send warning: %w", err)
-		}
+				"whether the chain ever fell behind the sender is unknown: this rate is a lower bound.\n")
 	}
 	if sendStats.Undersaturated() {
 		// Passing the whole-seconds check does not imply this: a run can span
 		// plenty of seconds while the chain drains everything as it arrives.
-		if _, err := fmt.Fprintf(statsFile,
+		fmt.Fprintf(w,
 			"send_warning the pool never held more than %d transactions (%.0f%% of the load): the chain kept "+
 				"pace with the sender, so this rate is a lower bound on it, not a measurement. Raise the load, "+
 				"or constrain the chain (block gas limit) so block production binds.\n",
-			sendStats.MaxPending, 100*float64(sendStats.MaxPending)/float64(sendStats.Sent)); err != nil {
-			return messages.NodeRunResult{}, fmt.Errorf("write send warning: %w", err)
-		}
+			sendStats.MaxPending, 100*float64(sendStats.MaxPending)/float64(sendStats.Sent))
 		logger.Warn("chain kept pace with the sender; rate is a lower bound",
 			"node", target.GlobalSeq, "max_pending", sendStats.MaxPending, "sent", sendStats.Sent)
 	}
 
-	stats, err := bench.DumpBlockStats(ctx, statsFile, client, rpcURL, statsFrom, end, len(txs), sendEnd, own)
-	if err != nil {
+	stats, err := bench.DumpBlockStats(ctx, w, client, rpcURL, statsFrom, end, len(txs), sendEnd, own)
+	// Flushed either way: a dump cut short still leaves the send summary.
+	if err := errors.Join(err, w.Flush()); err != nil {
 		return messages.NodeRunResult{}, fmt.Errorf("dump block stats: %w", err)
 	}
 	if stats.TooShort() {
@@ -964,16 +870,10 @@ func dockerDefaultBindArgs(startArgs []string) []string {
 }
 
 func hasStartArgPrefix(startArgs []string, prefix string) bool {
-	for i := 0; i < len(startArgs); i++ {
-		arg := strings.TrimSpace(startArgs[i])
-		if arg == prefix {
-			return true
-		}
-		if strings.HasPrefix(arg, prefix+"=") {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(startArgs, func(arg string) bool {
+		arg = strings.TrimSpace(arg)
+		return arg == prefix || strings.HasPrefix(arg, prefix+"=")
+	})
 }
 
 func dumpDockerLogs(spec messages.BenchmarkSpec, target messages.NodeTarget, containerName, reason string) (string, error) {
@@ -1184,100 +1084,77 @@ func bootstrapNodesAndGenesis(ctx context.Context, spec messages.BenchmarkSpec, 
 }
 
 func patchConfigToml(home string, nodes []messages.NodeTarget, spec messages.BenchmarkSpec) error {
-	configPath := filepath.Join(home, "config", "config.toml")
-	bz, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("read config.toml: %w", err)
-	}
-
 	peerEntries := make([]string, 0, len(nodes)-1)
 	for _, n := range nodes {
+		if n.Home == home {
+			continue
+		}
 		nodeIDBz, err := chainCmd(context.Background(), spec.Binary, nil, "comet", "show-node-id", "--home", n.Home)
 		if err != nil {
 			return fmt.Errorf("read node id for %s: %w", n.Home, err)
 		}
-		nodeID := strings.TrimSpace(string(nodeIDBz))
-		if n.Home == home {
-			continue
+		peerEntries = append(peerEntries, fmt.Sprintf("%s@%s:26656", strings.TrimSpace(string(nodeIDBz)), n.Hostname))
+	}
+
+	if err := editToml(home, "config.toml", func(cfg map[string]interface{}) {
+		setNested(cfg, []string{"p2p", "persistent_peers"}, strings.Join(peerEntries, ","))
+		setNested(cfg, []string{"mempool", "recheck"}, false)
+		setNested(cfg, []string{"mempool", "size"}, int64(10000))
+		setNested(cfg, []string{"consensus", "timeout_commit"}, "1s")
+		if spec.RunnerType == "docker" {
+			setNested(cfg, []string{"rpc", "laddr"}, "tcp://0.0.0.0:26657")
 		}
-		peerEntries = append(peerEntries, fmt.Sprintf("%s@%s:26656", nodeID, n.Hostname))
+		config.DeepMerge(cfg, spec.ConfigPatch)
+	}); err != nil {
+		return err
 	}
 
+	if err := editToml(home, "app.toml", func(cfg map[string]interface{}) {
+		setNested(cfg, []string{"minimum-gas-prices"}, fmt.Sprintf("0%s", spec.Denom))
+		// Size the EVM mempool to the load, the same way the reth families derive
+		// their --txpool.* flags. evmd's defaults hold ~6k transactions
+		// (global-slots 5120, global-queue 1024, account-slots 16), so anything
+		// past them is refused at submission and the run measures rejection. These
+		// are set before app_patch merges, so an operator can still override them.
+		for key, value := range evmMempoolSizes(spec) {
+			setNested(cfg, []string{"evm", "mempool", key}, value)
+		}
+		setNested(cfg, []string{"json-rpc", "enable"}, true)
+		if spec.RunnerType == "docker" {
+			setNested(cfg, []string{"json-rpc", "address"}, "0.0.0.0:8545")
+			setNested(cfg, []string{"json-rpc", "ws-address"}, "0.0.0.0:8546")
+		}
+		config.DeepMerge(cfg, spec.AppPatch)
+	}); err != nil {
+		return err
+	}
+
+	return editToml(home, "client.toml", func(cfg map[string]interface{}) {
+		if strings.TrimSpace(spec.ChainID) != "" {
+			setNested(cfg, []string{"chain-id"}, spec.ChainID)
+		}
+	})
+}
+
+// editToml rewrites a file in the node's config directory through edit.
+func editToml(home, name string, edit func(map[string]interface{})) error {
+	path := filepath.Join(home, "config", name)
+	in, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", name, err)
+	}
 	var cfg map[string]interface{}
-	if err := tomlv2.Unmarshal(bz, &cfg); err != nil {
-		return fmt.Errorf("decode config.toml: %w", err)
+	if err := tomlv2.Unmarshal(in, &cfg); err != nil {
+		return fmt.Errorf("decode %s: %w", name, err)
 	}
-
-	setNested(cfg, []string{"p2p", "persistent_peers"}, strings.Join(peerEntries, ","))
-	setNested(cfg, []string{"mempool", "recheck"}, false)
-	setNested(cfg, []string{"mempool", "size"}, int64(10000))
-	setNested(cfg, []string{"consensus", "timeout_commit"}, "1s")
-	if spec.RunnerType == "docker" {
-		setNested(cfg, []string{"rpc", "laddr"}, "tcp://0.0.0.0:26657")
-	}
-	config.DeepMerge(cfg, spec.ConfigPatch)
-
-	outCfg, err := tomlv2.Marshal(cfg)
+	edit(cfg)
+	out, err := tomlv2.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("encode config.toml: %w", err)
+		return fmt.Errorf("encode %s: %w", name, err)
 	}
-	if err := os.WriteFile(configPath, outCfg, 0o644); err != nil {
-		return fmt.Errorf("write config.toml: %w", err)
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", name, err)
 	}
-
-	appPath := filepath.Join(home, "config", "app.toml")
-	appBz, err := os.ReadFile(appPath)
-	if err != nil {
-		return fmt.Errorf("read app.toml: %w", err)
-	}
-	var appCfg map[string]interface{}
-	if err := tomlv2.Unmarshal(appBz, &appCfg); err != nil {
-		return fmt.Errorf("decode app.toml: %w", err)
-	}
-	setNested(appCfg, []string{"minimum-gas-prices"}, fmt.Sprintf("0%s", spec.Denom))
-	// Size the EVM mempool to the load, the same way the reth families derive
-	// their --txpool.* flags. evmd's defaults hold ~6k transactions
-	// (global-slots 5120, global-queue 1024, account-slots 16), so anything
-	// past them is refused at submission and the run measures rejection. These
-	// are set before app_patch merges, so an operator can still override them.
-	for key, value := range evmMempoolSizes(spec) {
-		setNested(appCfg, []string{"evm", "mempool", key}, value)
-	}
-	setNested(appCfg, []string{"json-rpc", "enable"}, true)
-	if spec.RunnerType == "docker" {
-		setNested(appCfg, []string{"json-rpc", "address"}, "0.0.0.0:8545")
-		setNested(appCfg, []string{"json-rpc", "ws-address"}, "0.0.0.0:8546")
-	}
-	config.DeepMerge(appCfg, spec.AppPatch)
-
-	outApp, err := tomlv2.Marshal(appCfg)
-	if err != nil {
-		return fmt.Errorf("encode app.toml: %w", err)
-	}
-	if err := os.WriteFile(appPath, outApp, 0o644); err != nil {
-		return fmt.Errorf("write app.toml: %w", err)
-	}
-
-	clientPath := filepath.Join(home, "config", "client.toml")
-	clientBz, err := os.ReadFile(clientPath)
-	if err != nil {
-		return fmt.Errorf("read client.toml: %w", err)
-	}
-	var clientCfg map[string]interface{}
-	if err := tomlv2.Unmarshal(clientBz, &clientCfg); err != nil {
-		return fmt.Errorf("decode client.toml: %w", err)
-	}
-	if strings.TrimSpace(spec.ChainID) != "" {
-		setNested(clientCfg, []string{"chain-id"}, spec.ChainID)
-	}
-	outClient, err := tomlv2.Marshal(clientCfg)
-	if err != nil {
-		return fmt.Errorf("encode client.toml: %w", err)
-	}
-	if err := os.WriteFile(clientPath, outClient, 0o644); err != nil {
-		return fmt.Errorf("write client.toml: %w", err)
-	}
-
 	return nil
 }
 
@@ -1294,27 +1171,16 @@ func evmMempoolSizes(spec messages.BenchmarkSpec) map[string]interface{} {
 }
 
 func setNested(m map[string]interface{}, keys []string, val interface{}) {
-	if len(keys) == 0 {
-		return
-	}
-	cur := m
-	for i := 0; i < len(keys)-1; i++ {
-		k := keys[i]
-		next, ok := cur[k]
+	last := len(keys) - 1
+	for _, k := range keys[:last] {
+		next, ok := m[k].(map[string]interface{})
 		if !ok {
-			nm := map[string]interface{}{}
-			cur[k] = nm
-			cur = nm
-			continue
+			next = map[string]interface{}{}
+			m[k] = next
 		}
-		nm, ok := next.(map[string]interface{})
-		if !ok {
-			nm = map[string]interface{}{}
-			cur[k] = nm
-		}
-		cur = nm
+		m = next
 	}
-	cur[keys[len(keys)-1]] = val
+	m[keys[last]] = val
 }
 
 func chainCmd(ctx context.Context, binary string, stdin []byte, args ...string) ([]byte, error) {

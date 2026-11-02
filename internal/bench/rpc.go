@@ -206,21 +206,13 @@ func JSONRPCCall(ctx context.Context, client *http.Client, url, method string, p
 	return nil
 }
 
-// DefaultPendingWatermark is how many pending transactions the sender will let
-// pile up before it pauses. It exists to keep a slow chain's mempool from
-// overflowing, but it also caps how deep a backlog a chain is ever given: a
-// chain that drains faster than the sender refills is then measured on the
-// sender's loop, not its own execution. Benchmarks comparing chains of
-// different speeds should raise it past the whole load so it never binds —
-// see broadcast_pending_watermark.
+// DefaultPendingWatermark is how many pending transactions the sender lets pile
+// up before it pauses, so a slow chain's mempool does not overflow. See
+// broadcast_pending_watermark in the README for what it costs a benchmark.
 const DefaultPendingWatermark = int64(5000)
 
-// BroadcastStats describes how the send itself went. It answers the question a
-// throughput number cannot: was the chain ever behind the sender? If MaxPending
-// stays small, the chain drained everything as fast as it arrived and the
-// measured rate is bounded by how fast transactions could be submitted, not by
-// how fast the chain can execute them — in which case a change to block
-// building will not move the number.
+// BroadcastStats describes how the send itself went. MaxPending tells whether
+// the chain was ever behind the sender, see Undersaturated.
 type BroadcastStats struct {
 	Sent       int
 	Duration   time.Duration

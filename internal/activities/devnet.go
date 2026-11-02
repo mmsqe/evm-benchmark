@@ -28,13 +28,13 @@ import (
 // embeds it and adds what differs.
 type devnetRuntime struct{}
 
-// HasConsensusRPC reports false: these nodes expose no CometBFT-style RPC, so
-// readiness is determined from the EVM JSON-RPC port alone.
 func (devnetRuntime) HasConsensusRPC() bool { return false }
 
-// LocalStartCommand runs the launcher generated for the node.
+// LocalStartCommand runs the node's generated launcher, which resolves its own
+// relative paths and so must run from the node home.
 func (devnetRuntime) LocalStartCommand(spec messages.BenchmarkSpec, target messages.NodeTarget) ([]string, string) {
-	return devnetLaunchCommand(spec, target)
+	home := devnetNodeHome(spec, target.GlobalSeq)
+	return []string{filepath.Join(home, "run.sh")}, home
 }
 
 // rpcPorter is the part of ChainRuntime the port checks below need.
@@ -42,10 +42,9 @@ type rpcPorter interface {
 	EVMRPCPort(spec messages.BenchmarkSpec, globalSeq int) int
 }
 
-// devnetPreStartCheck refuses to launch when the node's RPC port is already
-// served, which would otherwise mean benchmarking a leftover node's stale
-// genesis. An externally managed node, including a compose-managed container,
-// is expected to be listening already.
+// devnetPreStartCheck runs assertRPCPortsFree on a node about to be launched. An
+// externally managed node, including a compose-managed container, is expected to
+// be listening already.
 func devnetPreStartCheck(chain rpcPorter, spec messages.BenchmarkSpec, target messages.NodeTarget) error {
 	if !spec.StartNode || spec.RunnerType == "docker" {
 		return nil
@@ -78,13 +77,6 @@ func nodeMoniker(globalSeq int) string { return fmt.Sprintf("node%d", globalSeq)
 // devnetNodeHome is the per-node directory inside the generated network.
 func devnetNodeHome(spec messages.BenchmarkSpec, globalSeq int) string {
 	return filepath.Join(devnetDir(spec), nodeMoniker(globalSeq))
-}
-
-// devnetLaunchCommand runs the node's generated launcher, which resolves its own
-// relative paths and so must run from the node home.
-func devnetLaunchCommand(spec messages.BenchmarkSpec, target messages.NodeTarget) ([]string, string) {
-	home := devnetNodeHome(spec, target.GlobalSeq)
-	return []string{filepath.Join(home, "run.sh")}, home
 }
 
 // writeDevnetNodes writes each node's home with the shared genesis and the

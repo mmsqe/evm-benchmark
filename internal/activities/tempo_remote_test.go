@@ -346,7 +346,7 @@ func TestGenerateLayoutRemote(t *testing.T) {
 	spec.TempoFaucet = true
 	spec.DataDir = t.TempDir()
 
-	res, err := (&Activity{}).GenerateLayout(context.Background(), messages.GenerateLayoutRequest{Spec: spec})
+	res, err := (&Activity{}).GenerateLayout(context.Background(), messages.LayoutRequest{Spec: spec})
 	if err != nil {
 		t.Fatalf("GenerateLayout: %v", err)
 	}

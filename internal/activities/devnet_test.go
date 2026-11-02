@@ -67,9 +67,9 @@ func TestPortBlockDefaultBase(t *testing.T) {
 // they skip without the chain binaries.
 func TestDevnetLaunchCommand(t *testing.T) {
 	spec := messages.BenchmarkSpec{DataDir: "/tmp/bench"}
-	argv, dir := devnetLaunchCommand(spec, messages.NodeTarget{GlobalSeq: 2})
+	argv, dir := devnetRuntime{}.LocalStartCommand(spec, messages.NodeTarget{GlobalSeq: 2})
 	if len(argv) != 1 || argv[0] != "/tmp/bench/devnet/node2/run.sh" || dir != "/tmp/bench/devnet/node2" {
-		t.Errorf("devnetLaunchCommand = %v, %q", argv, dir)
+		t.Errorf("LocalStartCommand = %v, %q", argv, dir)
 	}
 }
 

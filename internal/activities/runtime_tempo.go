@@ -123,9 +123,6 @@ func (t tempoRuntime) Bootstrap(ctx context.Context, spec messages.BenchmarkSpec
 		return err
 	}
 
-	// Generate genesis, keys and per-node launchers in-process (see
-	// tempo_devnet.go): tempo-xtask builds genesis and consensus keys, and the
-	// rest of the network wiring is done here.
 	if err := generateTempoDevnet(ctx, spec, nodes); err != nil {
 		return fmt.Errorf("generate tempo devnet: %w", err)
 	}
@@ -142,13 +139,6 @@ func (t tempoRuntime) Bootstrap(ctx context.Context, spec messages.BenchmarkSpec
 // slice of NumAccounts per node, plus index 0 for the validator key.
 func tempoFundedAccounts(spec messages.BenchmarkSpec) int {
 	return spec.NumAccounts*max(spec.Validators, 1) + 1
-}
-
-func tempoDockerNetwork(spec messages.BenchmarkSpec) string {
-	if spec.TempoDockerNetwork != "" {
-		return spec.TempoDockerNetwork
-	}
-	return "tempo-devnet"
 }
 
 // tempoComposeProject keeps concurrent benchmark data dirs from colliding:
@@ -223,11 +213,6 @@ func (tempoRuntime) EVMRPCPort(spec messages.BenchmarkSpec, globalSeq int) int {
 	return tempoPorts.rpc(spec.TempoBasePort, globalSeq)
 }
 
-// tempoBasePort returns the base of a node's 6-port block.
-func tempoBasePort(spec messages.BenchmarkSpec, globalSeq int) int {
-	return tempoPorts.base(spec.TempoBasePort, globalSeq)
-}
-
 // ProducesTxs reports whether the runtime signs the node's transactions itself.
 // True for the native 0x76 path (the default); false when tempo_legacy_txs opts
 // into the shared legacy/London signer in internal/bench.
@@ -236,11 +221,7 @@ func (tempoRuntime) ProducesTxs(spec messages.BenchmarkSpec) bool {
 }
 
 // ProduceTxs writes the node's transaction file as Tempo's native 0x76 envelope
-// (see internal/tempotx and generateTempoNativeTxs), signed in-process. Only
-// called when ProducesTxs reports true.
-//
-// Keys are derived with the same path as internal/keygen, so a chain funded for
-// the built-in signer is funded for this one.
+// (see generateTempoNativeTxs).
 func (tempoRuntime) ProduceTxs(
 	ctx context.Context,
 	spec messages.BenchmarkSpec,

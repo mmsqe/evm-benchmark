@@ -25,7 +25,7 @@ func TestAllegroRunScriptFormat(t *testing.T) {
 		NumAccounts:            500,
 		NumTxs:                 40,
 	}
-	assertScript(t, allegroRunScript("/opt/allegro", allegroNodeArgs(spec, 1, allegroBasePort(spec, 1))), runScript{
+	assertScript(t, allegroRunScript("/opt/allegro", allegroNodeArgs(spec, 1, allegroPorts.base(spec.AllegroBasePort, 1))), runScript{
 		Binary: "/opt/allegro",
 		Args: strings.Fields(`node --chain ./genesis.json --datadir . --http --http.addr 127.0.0.1 --http.port 9007
 			--http.api all --authrpc.port 9006 --port 9005 --disable-discovery --ipcdisable
@@ -70,7 +70,7 @@ func TestAllegroValidatorSockets(t *testing.T) {
 		t.Errorf("sockets = %q, want %q", got, want)
 	}
 	for _, node := range nodes {
-		base := allegroBasePort(spec, node.GlobalSeq)
+		base := allegroPorts.base(spec.AllegroBasePort, node.GlobalSeq)
 		args := strings.Join(allegroNodeArgs(spec, node.GlobalSeq, base), " ")
 		socket := allegroValidatorSockets(spec, []messages.NodeTarget{node})[0]
 		if !strings.Contains(args, "--consensus.listen-address "+socket) {

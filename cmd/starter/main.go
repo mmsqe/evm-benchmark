@@ -71,12 +71,7 @@ func main() {
 		}
 		log.Printf("workflow wait transient error: %v; retrying in %s", err, retryDelay)
 		time.Sleep(retryDelay)
-		if retryDelay < 30*time.Second {
-			retryDelay *= 2
-			if retryDelay > 30*time.Second {
-				retryDelay = 30 * time.Second
-			}
-		}
+		retryDelay = min(2*retryDelay, 30*time.Second)
 	}
 
 	fmt.Println("workflow completed")

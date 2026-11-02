@@ -149,11 +149,8 @@ scripts/run-benchmark.sh --mode tempo run
 That stops any previous runtime, generates the devnet, pre-signs the
 transactions, starts the node, sends the load, and writes
 `/tmp/tempo-benchmark/output/node_0_block_stats.log`. Stop everything with
-`scripts/run-benchmark.sh --mode tempo stop`.
-
-The line that matters is `tx_summary`: if `included` is far below `sent`, the
-run measured rejection, not throughput; `tps_summary` carries the rate. See
-[Measuring](#measuring).
+`scripts/run-benchmark.sh --mode tempo stop`. See [Measuring](#measuring) for
+how to read the log.
 
 ### Transaction shape
 

@@ -57,7 +57,7 @@ func generateAllegroDevnet(ctx context.Context, spec messages.BenchmarkSpec, nod
 
 	nodeBin := cmp.Or(spec.AllegroBin, allegroDefaultNodeBin)
 	return writeDevnetNodes(spec, nodes, genesisBytes, func(node messages.NodeTarget) (runScript, error) {
-		args := allegroNodeArgs(spec, node.GlobalSeq, allegroBasePort(spec, node.GlobalSeq))
+		args := allegroNodeArgs(spec, node.GlobalSeq, allegroPorts.base(spec.AllegroBasePort, node.GlobalSeq))
 		return allegroRunScript(nodeBin, args), nil
 	})
 }
@@ -69,7 +69,7 @@ func generateAllegroDevnet(ctx context.Context, spec messages.BenchmarkSpec, nod
 func allegroValidatorSockets(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) []string {
 	sockets := make([]string, 0, len(nodes))
 	for _, node := range nodes {
-		sockets = append(sockets, fmt.Sprintf("127.0.0.1:%d", allegroBasePort(spec, node.GlobalSeq)))
+		sockets = append(sockets, fmt.Sprintf("127.0.0.1:%d", allegroPorts.base(spec.AllegroBasePort, node.GlobalSeq)))
 	}
 	return sockets
 }

@@ -28,22 +28,13 @@ type tpsBucket struct {
 	Rate float64 // Txs over the seconds until the next block, see bucketTPS
 }
 
-// bucketTPS groups blocks into whole-second buckets by block timestamp.
+// bucketTPS groups blocks into whole-second buckets by block timestamp, which
+// has second resolution, so a bucket's transaction count is that second's rate
+// (see "Measuring" in the README).
 //
-// Block timestamps are second-granularity on every chain here, so a bucket is
-// exactly one second wide: a bucket's transaction count IS that second's rate,
-// with no division by a quantized interval. A sliding window over block
-// timestamps cannot do that. It divides by the difference of two timestamps,
-// which is only meaningful when the window spans several seconds — true at
-// ~2.5 blocks/s (tempo: 5 blocks ≈ 2s), false at ~15 blocks/s (allegro: 5
-// blocks ≈ 0.3s), where the two timestamps are usually equal (rate reported as
-// 0) and otherwise a whole second apart (rate understated ~3x). That made a
-// fast chain look ~3x slower than it was.
-//
-// Buckets cover the active window only — the first through last second that
-// carried transactions — so the empty blocks before the load and the idle tail
-// after it do not dilute the rate. Every second *inside* that window is kept,
-// with or without a block: an idle second there is a real stall.
+// Buckets cover the first through last second that carried transactions, so the
+// empty blocks around the load do not dilute the rate. Every second inside is
+// kept, with or without a block: an idle second there is a real stall.
 func bucketTPS(points []blockPoint) []tpsBucket {
 	first, last := -1, -1
 	for i, p := range points {
@@ -103,18 +94,8 @@ func meanTPS(buckets []tpsBucket) float64 {
 	return float64(total) / float64(len(buckets))
 }
 
-// sustainedTPS covers the whole active window, partial edges included, so it
-// moves with where the load fell against a second boundary. Prefer
-// fullSecondTPS.
-func sustainedTPS(buckets []tpsBucket) float64 { return meanTPS(buckets) }
-
-// fullSecondTPS is the rate over seconds that lie entirely inside the load: the
-// first and last active seconds are partial by construction (the load starts
-// and ends mid-second), so they drag the average down by however much of those
-// two seconds carried no load. That is pure alignment noise — two runs of the
-// same binary can differ 14% on sustained while agreeing to 0.2% here — so this
-// is the figure to compare across runs. Returns 0 below three active seconds,
-// where nothing is interior.
+// fullSecondTPS is [RunStats.FullSecondTPS]; 0 below three active seconds, where
+// nothing is interior.
 func fullSecondTPS(buckets []tpsBucket) float64 { return meanTPS(interiorBuckets(buckets)) }
 
 // interiorBuckets drops the partial first and last seconds.
@@ -163,18 +144,18 @@ func parseBlockTimestamp(raw string) (int64, error) {
 	return 0, fmt.Errorf("invalid timestamp format: %q", raw)
 }
 
-// RunStats is what a run measured. Rates are per whole second (see bucketTPS);
-// ActiveSeconds is how many seconds of block production carried the load, and
-// is the run's resolution: a handful of seconds cannot show a chain's ceiling
-// because the load drains before any second is saturated.
+// RunStats is what a run measured. Rates are per whole second (see bucketTPS).
 type RunStats struct {
-	Peaks        []blockPoint
-	IncludedTxs  int
+	Peaks       []blockPoint
+	IncludedTxs int
+	// SustainedTPS covers every active second, so it moves with where the load
+	// fell against a second boundary.
 	SustainedTPS float64
 	// FullSecondTPS excludes the partial first and last seconds; compare this
-	// across runs, not SustainedTPS.
+	// across runs.
 	FullSecondTPS float64
 	MedianTPS     float64
+	// ActiveSeconds is how many seconds of block production carried the load.
 	ActiveSeconds int
 	FullSeconds   int
 	// DrainTPS is the rate over the DrainSeconds whole seconds after the sender
@@ -261,7 +242,7 @@ func DumpBlockStats(ctx context.Context, out io.Writer, client *http.Client, rpc
 	drain := drainBuckets(buckets, sendEnd)
 	stats := RunStats{
 		IncludedTxs:   totalIncludedTxs,
-		SustainedTPS:  sustainedTPS(buckets),
+		SustainedTPS:  meanTPS(buckets),
 		FullSecondTPS: fullSecondTPS(buckets),
 		MedianTPS:     medianTPS(buckets),
 		ActiveSeconds: len(buckets),

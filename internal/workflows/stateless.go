@@ -21,19 +21,13 @@ func StatelessEVMBenchmarkWorkflow(ctx workflow.Context, req messages.WorkflowRe
 	generateTxOpts.HeartbeatTimeout = 90 * time.Second
 	generateTxCtx := workflow.WithActivityOptions(ctx, generateTxOpts)
 
-	var layoutNodes []messages.NodeTarget
+	layoutActivity := "GenerateLayout"
 	if req.Spec.SkipGenerateLayout {
-		var loaded messages.LoadLayoutResponse
-		if err := workflow.ExecuteActivity(ctx, "LoadLayout", messages.LoadLayoutRequest{Spec: req.Spec}).Get(ctx, &loaded); err != nil {
-			return messages.WorkflowResponse{}, err
-		}
-		layoutNodes = loaded.Nodes
-	} else {
-		var layout messages.GenerateLayoutResponse
-		if err := workflow.ExecuteActivity(ctx, "GenerateLayout", messages.GenerateLayoutRequest{Spec: req.Spec}).Get(ctx, &layout); err != nil {
-			return messages.WorkflowResponse{}, err
-		}
-		layoutNodes = layout.Nodes
+		layoutActivity = "LoadLayout"
+	}
+	var layout messages.LayoutResponse
+	if err := workflow.ExecuteActivity(ctx, layoutActivity, messages.LayoutRequest{Spec: req.Spec}).Get(ctx, &layout); err != nil {
+		return messages.WorkflowResponse{}, err
 	}
 
 	dockerImageOverride := ""
@@ -46,8 +40,8 @@ func StatelessEVMBenchmarkWorkflow(ctx workflow.Context, req messages.WorkflowRe
 	}
 
 	if req.Spec.PreGenerateTxs {
-		futures := make([]workflow.Future, 0, len(layoutNodes))
-		for _, n := range layoutNodes {
+		futures := make([]workflow.Future, 0, len(layout.Nodes))
+		for _, n := range layout.Nodes {
 			f := workflow.ExecuteActivity(generateTxCtx, "GenerateTxs", messages.GenerateTxsRequest{Spec: req.Spec, Target: n})
 			futures = append(futures, f)
 		}
@@ -61,8 +55,8 @@ func StatelessEVMBenchmarkWorkflow(ctx workflow.Context, req messages.WorkflowRe
 
 	result := messages.WorkflowResponse{}
 	if req.Spec.RunNodes {
-		nodeFutures := make([]workflow.Future, 0, len(layoutNodes))
-		for _, n := range layoutNodes {
+		nodeFutures := make([]workflow.Future, 0, len(layout.Nodes))
+		for _, n := range layout.Nodes {
 			f := workflow.ExecuteActivity(ctx, "RunNode", messages.RunNodeRequest{Spec: req.Spec, Target: n, DockerImageOverride: dockerImageOverride})
 			nodeFutures = append(nodeFutures, f)
 		}
