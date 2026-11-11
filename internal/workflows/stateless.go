@@ -26,14 +26,14 @@ func StatelessEVMBenchmarkWorkflow(ctx workflow.Context, req messages.WorkflowRe
 		layoutActivity = "LoadLayout"
 	}
 	var layout messages.LayoutResponse
-	if err := workflow.ExecuteActivity(ctx, layoutActivity, messages.LayoutRequest{Spec: req.Spec}).Get(ctx, &layout); err != nil {
+	if err := workflow.ExecuteActivity(ctx, layoutActivity, messages.LayoutRequest(req)).Get(ctx, &layout); err != nil {
 		return messages.WorkflowResponse{}, err
 	}
 
 	dockerImageOverride := ""
 	if req.Spec.PatchImage.Enabled {
 		var patchRes messages.PatchImageResponse
-		if err := workflow.ExecuteActivity(ctx, "PatchImage", messages.PatchImageRequest{Spec: req.Spec}).Get(ctx, &patchRes); err != nil {
+		if err := workflow.ExecuteActivity(ctx, "PatchImage", messages.PatchImageRequest(req)).Get(ctx, &patchRes); err != nil {
 			return messages.WorkflowResponse{}, err
 		}
 		dockerImageOverride = patchRes.ImageTag

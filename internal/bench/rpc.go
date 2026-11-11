@@ -18,10 +18,10 @@ import (
 )
 
 type jsonRPCRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params"`
-	ID      int         `json:"id"`
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params"`
+	ID      int    `json:"id"`
 }
 
 type jsonRPCResponse struct {
@@ -49,7 +49,7 @@ var retryBackoff = time.Second
 
 // postJSON posts req and decodes the reply into out, retrying what the server
 // did not answer and waiting out HTTP 429 as long as it asks.
-func postJSON(ctx context.Context, client *http.Client, url string, req, out interface{}) error {
+func postJSON(ctx context.Context, client *http.Client, url string, req, out any) error {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("marshal rpc request: %w", err)
@@ -150,7 +150,7 @@ var numbers = regexp.MustCompile(`0x[0-9a-fA-F]+|\d+`)
 // RPCCall is one call of a JSONRPCBatch.
 type RPCCall struct {
 	Method string
-	Params interface{}
+	Params any
 }
 
 // JSONRPCBatch runs calls in batches of at most maxPerRequest and returns
@@ -188,7 +188,7 @@ func JSONRPCBatch(ctx context.Context, client *http.Client, url string, calls []
 	return results, nil
 }
 
-func JSONRPCCall(ctx context.Context, client *http.Client, url, method string, params interface{}, out interface{}) error {
+func JSONRPCCall(ctx context.Context, client *http.Client, url, method string, params any, out any) error {
 	var rpcResp jsonRPCResponse
 	if err := postJSON(ctx, client, url, jsonRPCRequest{JSONRPC: "2.0", Method: method, Params: params, ID: 1}, &rpcResp); err != nil {
 		return err
@@ -464,7 +464,7 @@ func percentile(sorted []time.Duration, p float64) time.Duration {
 
 func CurrentHeight(ctx context.Context, client *http.Client, rpcURL string) (int64, error) {
 	var hexHeight string
-	if err := JSONRPCCall(ctx, client, rpcURL, "eth_blockNumber", []interface{}{}, &hexHeight); err != nil {
+	if err := JSONRPCCall(ctx, client, rpcURL, "eth_blockNumber", []any{}, &hexHeight); err != nil {
 		return 0, err
 	}
 	var h int64
@@ -476,7 +476,7 @@ func CurrentHeight(ctx context.Context, client *http.Client, rpcURL string) (int
 
 func SuggestedGasPrice(ctx context.Context, client *http.Client, rpcURL string) (int64, error) {
 	var hexPrice string
-	if err := JSONRPCCall(ctx, client, rpcURL, "eth_gasPrice", []interface{}{}, &hexPrice); err != nil {
+	if err := JSONRPCCall(ctx, client, rpcURL, "eth_gasPrice", []any{}, &hexPrice); err != nil {
 		return 0, err
 	}
 
@@ -495,7 +495,7 @@ type ethBlock struct {
 
 func BlockByNumber(ctx context.Context, client *http.Client, rpcURL string, height int64) (ethBlock, error) {
 	var blk ethBlock
-	if err := JSONRPCCall(ctx, client, rpcURL, "eth_getBlockByNumber", []interface{}{fmt.Sprintf("0x%x", height), false}, &blk); err != nil {
+	if err := JSONRPCCall(ctx, client, rpcURL, "eth_getBlockByNumber", []any{fmt.Sprintf("0x%x", height), false}, &blk); err != nil {
 		return ethBlock{}, err
 	}
 	return blk, nil
@@ -510,7 +510,7 @@ type txPoolStatus struct {
 // and how many wait on a missing lower nonce (queued).
 func TxPoolStatus(ctx context.Context, client *http.Client, rpcURL string) (pending, queued int64, err error) {
 	var status txPoolStatus
-	if err := JSONRPCCall(ctx, client, rpcURL, "txpool_status", []interface{}{}, &status); err != nil {
+	if err := JSONRPCCall(ctx, client, rpcURL, "txpool_status", []any{}, &status); err != nil {
 		return 0, 0, err
 	}
 	if pending, err = strconv.ParseInt(status.Pending, 0, 64); err != nil {

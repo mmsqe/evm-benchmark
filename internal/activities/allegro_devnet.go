@@ -89,12 +89,12 @@ func allegroXtaskGenesisArgs(spec messages.BenchmarkSpec, outputDir, validatorsA
 // allegroGenesisPatch is the deep merge applied to the generated genesis: the
 // benchmark's funded accounts, the block gas budget, and finally the operator's
 // own genesis_patch, which wins over both.
-func allegroGenesisPatch(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) (map[string]interface{}, error) {
+func allegroGenesisPatch(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) (map[string]any, error) {
 	alloc, err := allegroFundedAlloc(spec, nodes)
 	if err != nil {
 		return nil, err
 	}
-	patch := map[string]interface{}{"alloc": alloc}
+	patch := map[string]any{"alloc": alloc}
 	if spec.AllegroGasLimit > 0 {
 		// alloy serialises gasLimit as a hex quantity; a decimal number here
 		// would be read as a much smaller budget.
@@ -105,14 +105,14 @@ func allegroGenesisPatch(spec messages.BenchmarkSpec, nodes []messages.NodeTarge
 
 // allegroFundedAlloc is the genesis alloc entry for every account the load
 // signs from.
-func allegroFundedAlloc(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) (map[string]interface{}, error) {
+func allegroFundedAlloc(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) (map[string]any, error) {
 	addrs, err := signerAddresses(spec, nodes)
 	if err != nil {
 		return nil, err
 	}
-	alloc := make(map[string]interface{}, len(addrs))
+	alloc := make(map[string]any, len(addrs))
 	for _, addr := range addrs {
-		alloc[allocKey(addr)] = map[string]interface{}{"balance": devnetAccountBalance}
+		alloc[allocKey(addr)] = map[string]any{"balance": devnetAccountBalance}
 	}
 	return alloc, nil
 }

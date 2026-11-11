@@ -755,7 +755,7 @@ func reportNodeMetrics(
 	return nil
 }
 
-func writeJSON(path string, value interface{}) error {
+func writeJSON(path string, value any) error {
 	b, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal json for %s: %w", path, err)
@@ -766,7 +766,7 @@ func writeJSON(path string, value interface{}) error {
 	return nil
 }
 
-func readJSON(path string, out interface{}) error {
+func readJSON(path string, out any) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -1096,7 +1096,7 @@ func patchConfigToml(home string, nodes []messages.NodeTarget, spec messages.Ben
 		peerEntries = append(peerEntries, fmt.Sprintf("%s@%s:26656", strings.TrimSpace(string(nodeIDBz)), n.Hostname))
 	}
 
-	if err := editToml(home, "config.toml", func(cfg map[string]interface{}) {
+	if err := editToml(home, "config.toml", func(cfg map[string]any) {
 		setNested(cfg, []string{"p2p", "persistent_peers"}, strings.Join(peerEntries, ","))
 		setNested(cfg, []string{"mempool", "recheck"}, false)
 		setNested(cfg, []string{"mempool", "size"}, int64(10000))
@@ -1109,7 +1109,7 @@ func patchConfigToml(home string, nodes []messages.NodeTarget, spec messages.Ben
 		return err
 	}
 
-	if err := editToml(home, "app.toml", func(cfg map[string]interface{}) {
+	if err := editToml(home, "app.toml", func(cfg map[string]any) {
 		setNested(cfg, []string{"minimum-gas-prices"}, fmt.Sprintf("0%s", spec.Denom))
 		// Size the EVM mempool to the load, the same way the reth families derive
 		// their --txpool.* flags. evmd's defaults hold ~6k transactions
@@ -1129,7 +1129,7 @@ func patchConfigToml(home string, nodes []messages.NodeTarget, spec messages.Ben
 		return err
 	}
 
-	return editToml(home, "client.toml", func(cfg map[string]interface{}) {
+	return editToml(home, "client.toml", func(cfg map[string]any) {
 		if strings.TrimSpace(spec.ChainID) != "" {
 			setNested(cfg, []string{"chain-id"}, spec.ChainID)
 		}
@@ -1137,13 +1137,13 @@ func patchConfigToml(home string, nodes []messages.NodeTarget, spec messages.Ben
 }
 
 // editToml rewrites a file in the node's config directory through edit.
-func editToml(home, name string, edit func(map[string]interface{})) error {
+func editToml(home, name string, edit func(map[string]any)) error {
 	path := filepath.Join(home, "config", name)
 	in, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", name, err)
 	}
-	var cfg map[string]interface{}
+	var cfg map[string]any
 	if err := tomlv2.Unmarshal(in, &cfg); err != nil {
 		return fmt.Errorf("decode %s: %w", name, err)
 	}
@@ -1159,9 +1159,9 @@ func editToml(home, name string, edit func(map[string]interface{})) error {
 }
 
 // evmMempoolSizes renders poolCapacity as evmd's app.toml mempool keys.
-func evmMempoolSizes(spec messages.BenchmarkSpec) map[string]interface{} {
+func evmMempoolSizes(spec messages.BenchmarkSpec) map[string]any {
 	count, slots := poolCapacity(spec)
-	return map[string]interface{}{
+	return map[string]any{
 		"global-slots":      int64(count),
 		"global-queue":      int64(count),
 		"account-slots":     int64(slots),
@@ -1170,12 +1170,12 @@ func evmMempoolSizes(spec messages.BenchmarkSpec) map[string]interface{} {
 	}
 }
 
-func setNested(m map[string]interface{}, keys []string, val interface{}) {
+func setNested(m map[string]any, keys []string, val any) {
 	last := len(keys) - 1
 	for _, k := range keys[:last] {
-		next, ok := m[k].(map[string]interface{})
+		next, ok := m[k].(map[string]any)
 		if !ok {
-			next = map[string]interface{}{}
+			next = map[string]any{}
 			m[k] = next
 		}
 		m = next
@@ -1206,16 +1206,16 @@ func bech32Address(globalSeq, index int, prefix, baseMnemonic string) (string, e
 // patchGenesisContractAuthAccount gives the test token an auth account, unless
 // genesis has one already.
 func patchGenesisContractAuthAccount(genesis []byte, prefix string) ([]byte, error) {
-	var doc map[string]interface{}
+	var doc map[string]any
 	if err := json.Unmarshal(genesis, &doc); err != nil {
 		return nil, fmt.Errorf("decode genesis json: %w", err)
 	}
 
-	appState, ok := doc["app_state"].(map[string]interface{})
+	appState, ok := doc["app_state"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("genesis missing app_state")
 	}
-	authState, ok := appState["auth"].(map[string]interface{})
+	authState, ok := appState["auth"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("genesis missing app_state.auth")
 	}
@@ -1224,14 +1224,14 @@ func patchGenesisContractAuthAccount(genesis []byte, prefix string) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	accounts, _ := authState["accounts"].([]interface{})
+	accounts, _ := authState["accounts"].([]any)
 	for _, entry := range accounts {
-		if m, ok := entry.(map[string]interface{}); ok && m["address"] == contractAddr {
+		if m, ok := entry.(map[string]any); ok && m["address"] == contractAddr {
 			return genesis, nil
 		}
 	}
 
-	authState["accounts"] = append(accounts, map[string]interface{}{
+	authState["accounts"] = append(accounts, map[string]any{
 		"@type":    "/cosmos.auth.v1beta1.BaseAccount",
 		"address":  contractAddr,
 		"sequence": "1",

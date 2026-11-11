@@ -20,7 +20,7 @@ type sharedChain struct {
 	ours map[int64][]string
 }
 
-func (c *sharedChain) handle(method string, params json.RawMessage) (interface{}, string) {
+func (c *sharedChain) handle(method string, params json.RawMessage) (any, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch method {
@@ -28,7 +28,7 @@ func (c *sharedChain) handle(method string, params json.RawMessage) (interface{}
 		c.head++
 		return fmt.Sprintf("0x%x", c.head), ""
 	case "eth_getBlockByNumber":
-		var p []interface{}
+		var p []any
 		_ = json.Unmarshal(params, &p)
 		var h int64
 		_, _ = fmt.Sscanf(p[0].(string), "0x%x", &h)
@@ -37,7 +37,7 @@ func (c *sharedChain) handle(method string, params json.RawMessage) (interface{}
 		}
 		txs := []string{fmt.Sprintf("0xother-%d-a", h), fmt.Sprintf("0xother-%d-b", h)}
 		txs = append(txs, c.ours[h]...)
-		return map[string]interface{}{"timestamp": fmt.Sprintf("0x%x", 1000+h), "transactions": txs}, ""
+		return map[string]any{"timestamp": fmt.Sprintf("0x%x", 1000+h), "transactions": txs}, ""
 	}
 	return nil, "unexpected " + method
 }

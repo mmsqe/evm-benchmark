@@ -17,13 +17,13 @@ import (
 )
 
 type chainConfigRecord struct {
-	Cmd           string                 `json:"cmd"`
-	ChainID       string                 `json:"chain_id"`
-	AccountPrefix string                 `json:"account-prefix"`
-	EVMDenom      string                 `json:"evm_denom"`
-	EVMChainID    int64                  `json:"evm_chain_id"`
-	Bank          map[string]interface{} `json:"bank"`
-	EVM           map[string]interface{} `json:"evm"`
+	Cmd           string         `json:"cmd"`
+	ChainID       string         `json:"chain_id"`
+	AccountPrefix string         `json:"account-prefix"`
+	EVMDenom      string         `json:"evm_denom"`
+	EVMChainID    int64          `json:"evm_chain_id"`
+	Bank          map[string]any `json:"bank"`
+	EVM           map[string]any `json:"evm"`
 }
 
 type TemporalConfig struct {
@@ -210,7 +210,7 @@ func applyChainConfig(configPath string, cfg *AppConfig) error {
 		spec.EVMChainID = record.EVMChainID
 	}
 
-	appState := map[string]interface{}{}
+	appState := map[string]any{}
 	if record.Bank != nil {
 		appState["bank"] = record.Bank
 	}
@@ -218,7 +218,7 @@ func applyChainConfig(configPath string, cfg *AppConfig) error {
 		appState["evm"] = record.EVM
 	}
 	if len(appState) > 0 {
-		spec.GenesisPatch = DeepMerge(map[string]interface{}{"app_state": appState}, spec.GenesisPatch)
+		spec.GenesisPatch = DeepMerge(map[string]any{"app_state": appState}, spec.GenesisPatch)
 	}
 
 	return nil
@@ -239,12 +239,12 @@ func evaluateChainProfile(chainsPath, name string) ([]byte, error) {
 // DeepMerge merges src into dst and returns dst: objects merge recursively, any
 // other value replaces dst's. Objects src adds are copied, so one patch can be
 // applied to several documents.
-func DeepMerge(dst, src map[string]interface{}) map[string]interface{} {
+func DeepMerge(dst, src map[string]any) map[string]any {
 	for k, sv := range src {
-		if svMap, ok := sv.(map[string]interface{}); ok {
-			dvMap, _ := dst[k].(map[string]interface{})
+		if svMap, ok := sv.(map[string]any); ok {
+			dvMap, _ := dst[k].(map[string]any)
 			if dvMap == nil {
-				dvMap = make(map[string]interface{}, len(svMap))
+				dvMap = make(map[string]any, len(svMap))
 			}
 			dst[k] = DeepMerge(dvMap, svMap)
 			continue
@@ -304,22 +304,23 @@ func applyDefaults(cfg *AppConfig) {
 }
 
 func validate(cfg AppConfig, runtimeValidation bool) error {
-	if cfg.Benchmark.DataDir == "" {
+	spec := cfg.Benchmark
+	if spec.DataDir == "" {
 		return fmt.Errorf("benchmark.data_dir is required")
 	}
-	if cfg.Benchmark.Validators < 1 {
+	if spec.Validators < 1 {
 		return fmt.Errorf("benchmark.validators must be >= 1")
 	}
-	if cfg.Benchmark.TxType != messages.SimpleTransferTx && cfg.Benchmark.TxType != messages.ERC20TransferTx {
+	if spec.TxType != messages.SimpleTransferTx && spec.TxType != messages.ERC20TransferTx {
 		return fmt.Errorf("benchmark.tx_type must be %q or %q", messages.SimpleTransferTx, messages.ERC20TransferTx)
 	}
-	if cfg.Benchmark.RunnerType != "local" && cfg.Benchmark.RunnerType != "docker" {
+	if spec.RunnerType != "local" && spec.RunnerType != "docker" {
 		return fmt.Errorf("benchmark.runner_type must be \"local\" or \"docker\"")
 	}
-	if err := validateHotRecipient(cfg.Benchmark); err != nil {
+	if err := validateHotRecipient(spec); err != nil {
 		return err
 	}
-	if err := validateRemote(cfg.Benchmark); err != nil {
+	if err := validateRemote(spec); err != nil {
 		return err
 	}
 
@@ -327,14 +328,14 @@ func validate(cfg AppConfig, runtimeValidation bool) error {
 		return nil
 	}
 
-	if cfg.Benchmark.RunnerType == "docker" && cfg.Benchmark.StartNode && cfg.Benchmark.DockerImage == "" {
+	if spec.RunnerType == "docker" && spec.StartNode && spec.DockerImage == "" {
 		return fmt.Errorf("benchmark.docker_image is required when runner_type=docker and start_node=true")
 	}
-	if cfg.Benchmark.PatchImage.Enabled {
-		if !cfg.Benchmark.StartNode {
+	if spec.PatchImage.Enabled {
+		if !spec.StartNode {
 			return fmt.Errorf("benchmark.patch_image.enabled requires benchmark.start_node=true")
 		}
-		if cfg.Benchmark.RunnerType == "docker" && cfg.Benchmark.PatchImage.FromImage == "" && cfg.Benchmark.DockerImage == "" {
+		if spec.RunnerType == "docker" && spec.PatchImage.FromImage == "" && spec.DockerImage == "" {
 			return fmt.Errorf("benchmark.patch_image.enabled requires benchmark.patch_image.from_image or benchmark.docker_image")
 		}
 	}

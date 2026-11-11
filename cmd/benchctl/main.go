@@ -45,7 +45,7 @@ Usage:
 Commands:
   build-image   Build a base docker image with docker build
   gen           Generate benchmark layout and genesis data (generic-gen equivalent)
-	patchimage    Build patched image by ADD-ing generated out dir into /data
+  patchimage    Build patched image by ADD-ing generated out dir into /data
 `)
 }
 
@@ -62,12 +62,8 @@ func runBuildImage(args []string) {
 	}
 
 	cmdArgs := []string{"build", "-f", *dockerfile, "-t", *tag}
-	if strings.TrimSpace(*buildArgs) != "" {
-		for _, entry := range strings.Split(*buildArgs, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry == "" {
-				continue
-			}
+	for entry := range strings.SplitSeq(*buildArgs, ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
 			cmdArgs = append(cmdArgs, "--build-arg", entry)
 		}
 	}

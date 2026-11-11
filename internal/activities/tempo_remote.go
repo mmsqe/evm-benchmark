@@ -59,7 +59,7 @@ func validateTempoRemote(spec messages.BenchmarkSpec) error {
 // bootstrapTempoRemote checks the endpoint serves the chain the transactions
 // are signed for, then makes sure every sender can pay for the whole run.
 func bootstrapTempoRemote(ctx context.Context, spec messages.BenchmarkSpec, nodes []messages.NodeTarget) error {
-	ids, err := readNumbers(ctx, spec, []bench.RPCCall{{Method: "eth_chainId", Params: []interface{}{}}})
+	ids, err := readNumbers(ctx, spec, []bench.RPCCall{{Method: "eth_chainId", Params: []any{}}})
 	if err != nil {
 		return fmt.Errorf("reach %s: %w", spec.RemoteRPCURL, err)
 	}
@@ -88,8 +88,8 @@ func refuseStuckSenders(ctx context.Context, spec messages.BenchmarkSpec, sender
 	calls := make([]bench.RPCCall, 0, 2*len(senders))
 	for _, addr := range senders {
 		calls = append(calls,
-			bench.RPCCall{Method: "eth_getTransactionCount", Params: []interface{}{addr.Hex(), "latest"}},
-			bench.RPCCall{Method: "eth_getTransactionCount", Params: []interface{}{addr.Hex(), "pending"}})
+			bench.RPCCall{Method: "eth_getTransactionCount", Params: []any{addr.Hex(), "latest"}},
+			bench.RPCCall{Method: "eth_getTransactionCount", Params: []any{addr.Hex(), "pending"}})
 	}
 	counts, err := readNumbers(ctx, spec, calls)
 	if err != nil {
@@ -196,8 +196,8 @@ func fundFromIndex0(ctx context.Context, spec messages.BenchmarkSpec, short []co
 	from := crypto.PubkeyToAddress(key.PublicKey)
 	vals, err := readNumbers(ctx, spec, []bench.RPCCall{
 		ethCall(tempotx.FeeToken, tempotx.BalanceOf(from)),
-		{Method: "eth_getTransactionCount", Params: []interface{}{from.Hex(), "pending"}},
-		{Method: "eth_gasPrice", Params: []interface{}{}},
+		{Method: "eth_getTransactionCount", Params: []any{from.Hex(), "pending"}},
+		{Method: "eth_gasPrice", Params: []any{}},
 	})
 	if err != nil {
 		return fmt.Errorf("read account 0: %w", err)
@@ -279,7 +279,7 @@ func tempoRemoteNonces(ctx context.Context, spec messages.BenchmarkSpec, target 
 			key := uint64(spec.TempoNonceKey) + uint64(lane)
 			if key == 0 {
 				// "pending" also counts what an earlier run left in the pool.
-				calls = append(calls, bench.RPCCall{Method: "eth_getTransactionCount", Params: []interface{}{addr.Hex(), "pending"}})
+				calls = append(calls, bench.RPCCall{Method: "eth_getTransactionCount", Params: []any{addr.Hex(), "pending"}})
 			} else {
 				calls = append(calls, ethCall(tempotx.NoncePrecompile, tempotx.GetNonce(addr, key)))
 			}
@@ -303,7 +303,7 @@ var remoteClient = &http.Client{Timeout: 10 * time.Second}
 
 // ethCall is an eth_call of data on to.
 func ethCall(to common.Address, data []byte) bench.RPCCall {
-	return bench.RPCCall{Method: "eth_call", Params: []interface{}{
+	return bench.RPCCall{Method: "eth_call", Params: []any{
 		map[string]string{"to": to.Hex(), "data": hexutil.Encode(data)}, "latest",
 	}}
 }

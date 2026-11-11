@@ -93,11 +93,11 @@ func TestEvmdExampleDoesNotPinPoolSizes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	evm, ok := cfg.Benchmark.AppPatch["evm"].(map[string]interface{})
+	evm, ok := cfg.Benchmark.AppPatch["evm"].(map[string]any)
 	if !ok {
 		return // no evm patch at all is fine
 	}
-	pool, ok := evm["mempool"].(map[string]interface{})
+	pool, ok := evm["mempool"].(map[string]any)
 	if !ok {
 		return
 	}

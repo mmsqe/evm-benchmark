@@ -135,11 +135,11 @@ func TestAllegroGenesisPatchShape(t *testing.T) {
 	if got := patch["gasLimit"]; got != "0x3b9aca00" {
 		t.Errorf("gasLimit = %v, want the hex quantity 0x3b9aca00", got)
 	}
-	if _, ok := patch["alloc"].(map[string]interface{}); !ok {
+	if _, ok := patch["alloc"].(map[string]any); !ok {
 		t.Errorf("alloc missing from patch: %v", patch)
 	}
 
-	spec.GenesisPatch = map[string]interface{}{"gasLimit": "0x1"}
+	spec.GenesisPatch = map[string]any{"gasLimit": "0x1"}
 	if patch, err = allegroGenesisPatch(spec, nodes); err != nil {
 		t.Fatalf("allegroGenesisPatch: %v", err)
 	}

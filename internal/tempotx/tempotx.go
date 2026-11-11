@@ -84,25 +84,25 @@ func Hash(raw string) string {
 // fields builds the RLP field list. sig==nil yields the sender-signing payload
 // (13 fields); a non-nil signature appends field 13 for broadcast. This is the
 // field layout for the no-fee-payer case.
-func (t *Tx) fields(sig []byte) []interface{} {
-	calls := make([]interface{}, len(t.Calls))
+func (t *Tx) fields(sig []byte) []any {
+	calls := make([]any, len(t.Calls))
 	for i, c := range t.Calls {
-		calls[i] = []interface{}{c.To.Bytes(), c.Value, c.Data}
+		calls[i] = []any{c.To.Bytes(), c.Value, c.Data}
 	}
-	fields := []interface{}{
+	fields := []any{
 		t.ChainID,              // 0: chainId
 		t.MaxPriorityFeePerGas, // 1: maxPriorityFeePerGas
 		t.MaxFeePerGas,         // 2: maxFeePerGas
 		t.GasLimit,             // 3: gas
 		calls,                  // 4: calls [[to, value, data], ...]
-		[]interface{}{},        // 5: accessList (empty)
-		t.NonceKey,             // 6: nonceKey
-		t.Nonce,                // 7: nonce
-		uint64(0),              // 8: validBefore
-		uint64(0),              // 9: validAfter
-		t.FeeToken.Bytes(),     // 10: feeToken (20 bytes)
-		[]byte{},               // 11: feePayerSignatureOrSender (none)
-		[]interface{}{},        // 12: authorizationList (empty)
+		[]any{},
+		t.NonceKey,         // 6: nonceKey
+		t.Nonce,            // 7: nonce
+		uint64(0),          // 8: validBefore
+		uint64(0),          // 9: validAfter
+		t.FeeToken.Bytes(), // 10: feeToken (20 bytes)
+		[]byte{},           // 11: feePayerSignatureOrSender (none)
+		[]any{},
 	}
 	if sig != nil {
 		fields = append(fields, sig) // 13: sender signature envelope (65 bytes)

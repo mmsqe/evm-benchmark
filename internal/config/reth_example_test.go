@@ -60,7 +60,7 @@ func TestRethExampleConfig(t *testing.T) {
 		t.Errorf("gas limit/watermark = %d/%d, want at least 1e10 and a sender that never pauses",
 			b.RethGasLimit, b.BroadcastPendingWatermark)
 	}
-	config, _ := b.GenesisPatch["config"].(map[string]interface{})
+	config, _ := b.GenesisPatch["config"].(map[string]any)
 	if v, ok := config["osakaTime"]; !ok || v != nil {
 		t.Errorf("genesis_patch.config.osakaTime = %v, want null: Osaka's block size cap binds at one block a second", v)
 	}

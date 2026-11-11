@@ -271,7 +271,7 @@ func shQuote(s string) string {
 }
 
 // patchGenesisJSON applies patch to the genesis file.
-func patchGenesisJSON(genesisPath string, patch map[string]interface{}) error {
+func patchGenesisJSON(genesisPath string, patch map[string]any) error {
 	raw, err := os.ReadFile(genesisPath)
 	if err != nil {
 		return fmt.Errorf("read genesis for patch: %w", err)
@@ -288,10 +288,10 @@ func patchGenesisJSON(genesisPath string, patch map[string]interface{}) error {
 
 // applyGenesisPatch deep-merges patch into a genesis document. UseNumber keeps
 // integers beyond float64's exact range (token balances reach 2**64-1) verbatim.
-func applyGenesisPatch(genesis []byte, patch map[string]interface{}) ([]byte, error) {
+func applyGenesisPatch(genesis []byte, patch map[string]any) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(genesis))
 	dec.UseNumber()
-	var doc map[string]interface{}
+	var doc map[string]any
 	if err := dec.Decode(&doc); err != nil {
 		return nil, fmt.Errorf("decode genesis: %w", err)
 	}

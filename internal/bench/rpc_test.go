@@ -15,18 +15,18 @@ import (
 )
 
 // rpcHandler answers one JSON-RPC call: a result, or an error message.
-type rpcHandler func(method string, params json.RawMessage) (interface{}, string)
+type rpcHandler func(method string, params json.RawMessage) (any, string)
 
 // fakeRPC serves JSON-RPC over HTTP, single and batched, from handle.
 func fakeRPC(t *testing.T, handle rpcHandler) *httptest.Server {
 	t.Helper()
-	answer := func(req map[string]json.RawMessage) map[string]interface{} {
+	answer := func(req map[string]json.RawMessage) map[string]any {
 		var method string
 		_ = json.Unmarshal(req["method"], &method)
 		result, errMsg := handle(method, req["params"])
-		resp := map[string]interface{}{"jsonrpc": "2.0", "id": req["id"]}
+		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"]}
 		if errMsg != "" {
-			resp["error"] = map[string]interface{}{"code": -32000, "message": errMsg}
+			resp["error"] = map[string]any{"code": -32000, "message": errMsg}
 		} else {
 			resp["result"] = result
 		}
@@ -38,7 +38,7 @@ func fakeRPC(t *testing.T, handle rpcHandler) *httptest.Server {
 		if strings.HasPrefix(strings.TrimSpace(string(body)), "[") {
 			var reqs []map[string]json.RawMessage
 			_ = json.Unmarshal(body, &reqs)
-			out := make([]map[string]interface{}, len(reqs))
+			out := make([]map[string]any, len(reqs))
 			for i, req := range reqs {
 				out[i] = answer(req)
 			}
@@ -109,9 +109,9 @@ func TestJSONRPCBatchChunksAndOrders(t *testing.T) {
 		mu.Lock()
 		sizes = append(sizes, len(reqs))
 		mu.Unlock()
-		out := make([]map[string]interface{}, 0, len(reqs))
+		out := make([]map[string]any, 0, len(reqs))
 		for i := len(reqs) - 1; i >= 0; i-- {
-			out = append(out, map[string]interface{}{"jsonrpc": "2.0", "id": reqs[i].ID, "result": "echo-" + reqs[i].Params[0]})
+			out = append(out, map[string]any{"jsonrpc": "2.0", "id": reqs[i].ID, "result": "echo-" + reqs[i].Params[0]})
 		}
 		_ = json.NewEncoder(w).Encode(out)
 	}))
@@ -136,7 +136,7 @@ func TestJSONRPCBatchChunksAndOrders(t *testing.T) {
 }
 
 func TestJSONRPCBatchFailsOnCallError(t *testing.T) {
-	srv := fakeRPC(t, func(method string, _ json.RawMessage) (interface{}, string) {
+	srv := fakeRPC(t, func(method string, _ json.RawMessage) (any, string) {
 		if method == "bad" {
 			return nil, "nope"
 		}
@@ -200,7 +200,7 @@ func TestWatermarkGivesUpOnStuckPool(t *testing.T) {
 // among them, and a pool the endpoint will not report flagged as unknown
 // rather than read as empty.
 func TestBroadcastReportsRejections(t *testing.T) {
-	srv := fakeRPC(t, func(method string, params json.RawMessage) (interface{}, string) {
+	srv := fakeRPC(t, func(method string, params json.RawMessage) (any, string) {
 		switch method {
 		case "txpool_status":
 			return nil, "method not allowed: txpool_status"
@@ -285,7 +285,7 @@ func TestBroadcastRetriesUnansweredRequests(t *testing.T) {
 func TestBroadcastStreamsKeepsEachStreamInOrder(t *testing.T) {
 	var mu sync.Mutex
 	arrived := map[string][]int{}
-	srv := fakeRPC(t, func(method string, params json.RawMessage) (interface{}, string) {
+	srv := fakeRPC(t, func(method string, params json.RawMessage) (any, string) {
 		var raws []string
 		_ = json.Unmarshal(params, &raws)
 		var account string

@@ -123,8 +123,8 @@ func TestPatchGenesisJSONPreservesLargeInts(t *testing.T) {
 	if err := os.WriteFile(path, []byte(orig), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	patch := map[string]interface{}{
-		"config": map[string]interface{}{"chainId": 9999},
+	patch := map[string]any{
+		"config": map[string]any{"chainId": 9999},
 	}
 	if err := patchGenesisJSON(path, patch); err != nil {
 		t.Fatalf("patchGenesisJSON: %v", err)

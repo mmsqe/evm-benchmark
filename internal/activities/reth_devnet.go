@@ -94,17 +94,17 @@ func generateRethDevnet(spec messages.BenchmarkSpec, nodes []messages.NodeTarget
 // chain, and funds every account the signer uses, natively and, for ERC-20 load,
 // in the deployed token. Amsterdam stays off: its blocks carry access lists,
 // which move reth onto a different validation path. genesis_patch wins.
-func rethGenesis(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) (map[string]interface{}, error) {
+func rethGenesis(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) (map[string]any, error) {
 	deployToken := spec.TxType == messages.ERC20TransferTx &&
 		common.HexToAddress(spec.ERC20ContractAddress) == rethTokenAddress
 	addrs, err := signerAddresses(spec, nodes)
 	if err != nil {
 		return nil, err
 	}
-	alloc := make(map[string]interface{}, len(addrs)+1)
-	tokenStorage := map[string]interface{}{}
+	alloc := make(map[string]any, len(addrs)+1)
+	tokenStorage := map[string]any{}
 	for _, addr := range addrs {
-		alloc[allocKey(addr)] = map[string]interface{}{"balance": devnetAccountBalance}
+		alloc[allocKey(addr)] = map[string]any{"balance": devnetAccountBalance}
 		if deployToken {
 			tokenStorage[rethTokenBalanceSlot(addr).Hex()] = common.BigToHash(rethTokenBalance).Hex()
 		}
@@ -112,15 +112,15 @@ func rethGenesis(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) (map[
 	if deployToken {
 		// Seeded so the first credit to it costs the same as every later one.
 		tokenStorage[rethTokenBalanceSlot(bench.HotRecipient).Hex()] = common.BigToHash(big.NewInt(1)).Hex()
-		alloc[allocKey(rethTokenAddress)] = map[string]interface{}{
+		alloc[allocKey(rethTokenAddress)] = map[string]any{
 			"balance": "0x0",
 			"code":    hexutil.Encode(rethTokenCode),
 			"storage": tokenStorage,
 		}
 	}
 
-	genesis := map[string]interface{}{
-		"config": map[string]interface{}{
+	genesis := map[string]any{
+		"config": map[string]any{
 			"chainId":                       spec.EVMChainID,
 			"homesteadBlock":                0,
 			"eip150Block":                   0,
@@ -139,10 +139,10 @@ func rethGenesis(spec messages.BenchmarkSpec, nodes []messages.NodeTarget) (map[
 			"cancunTime":                    0,
 			"pragueTime":                    0,
 			"osakaTime":                     0,
-			"blobSchedule": map[string]interface{}{
-				"cancun": map[string]interface{}{"target": 3, "max": 6, "baseFeeUpdateFraction": 3338477},
-				"prague": map[string]interface{}{"target": 6, "max": 9, "baseFeeUpdateFraction": 5007716},
-				"osaka":  map[string]interface{}{"target": 6, "max": 9, "baseFeeUpdateFraction": 5007716},
+			"blobSchedule": map[string]any{
+				"cancun": map[string]any{"target": 3, "max": 6, "baseFeeUpdateFraction": 3338477},
+				"prague": map[string]any{"target": 6, "max": 9, "baseFeeUpdateFraction": 5007716},
+				"osaka":  map[string]any{"target": 6, "max": 9, "baseFeeUpdateFraction": 5007716},
 			},
 		},
 		"nonce":         "0x0",

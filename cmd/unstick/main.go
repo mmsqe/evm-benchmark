@@ -81,7 +81,7 @@ func main() {
 	for {
 		calls := make([]bench.RPCCall, len(senders))
 		for i, s := range senders {
-			calls[i] = bench.RPCCall{Method: "eth_getTransactionCount", Params: []interface{}{s.addr.Hex(), "latest"}}
+			calls[i] = bench.RPCCall{Method: "eth_getTransactionCount", Params: []any{s.addr.Hex(), "latest"}}
 		}
 		counts, err := bench.JSONRPCBatch(ctx, client, spec.RemoteRPCURL, calls, spec.BroadcastBatchSize)
 		if err != nil {
@@ -162,7 +162,7 @@ func pooledTops(ctx context.Context, client *http.Client, url string) (map[commo
 		Pending map[string]map[string]json.RawMessage `json:"pending"`
 		Queued  map[string]map[string]json.RawMessage `json:"queued"`
 	}
-	if err := bench.JSONRPCCall(ctx, client, url, "txpool_inspect", []interface{}{}, &pool); err != nil {
+	if err := bench.JSONRPCCall(ctx, client, url, "txpool_inspect", []any{}, &pool); err != nil {
 		return nil, err
 	}
 	tops := map[common.Address]uint64{}
@@ -240,7 +240,7 @@ func quantity(raw json.RawMessage) uint64 {
 	return v
 }
 
-func fatal(format string, args ...interface{}) {
+func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "FAIL: "+format+"\n", args...)
 	os.Exit(1)
 }

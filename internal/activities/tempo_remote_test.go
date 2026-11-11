@@ -54,7 +54,7 @@ func newFakeTempo() *fakeTempo {
 
 func word(v *big.Int) string { return "0x" + common.Bytes2Hex(common.LeftPadBytes(v.Bytes(), 32)) }
 
-func (f *fakeTempo) handle(method string, params json.RawMessage) (interface{}, string) {
+func (f *fakeTempo) handle(method string, params json.RawMessage) (any, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var p []json.RawMessage
@@ -125,13 +125,13 @@ func (f *fakeTempo) handle(method string, params json.RawMessage) (interface{}, 
 // remote spec aimed at it.
 func (f *fakeTempo) serve(t *testing.T) messages.BenchmarkSpec {
 	t.Helper()
-	answer := func(req map[string]json.RawMessage) map[string]interface{} {
+	answer := func(req map[string]json.RawMessage) map[string]any {
 		var method string
 		_ = json.Unmarshal(req["method"], &method)
 		result, errMsg := f.handle(method, req["params"])
-		resp := map[string]interface{}{"jsonrpc": "2.0", "id": req["id"]}
+		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"]}
 		if errMsg != "" {
-			resp["error"] = map[string]interface{}{"code": -32000, "message": errMsg}
+			resp["error"] = map[string]any{"code": -32000, "message": errMsg}
 		} else {
 			resp["result"] = result
 		}
@@ -142,7 +142,7 @@ func (f *fakeTempo) serve(t *testing.T) messages.BenchmarkSpec {
 		if strings.HasPrefix(strings.TrimSpace(string(body)), "[") {
 			var reqs []map[string]json.RawMessage
 			_ = json.Unmarshal(body, &reqs)
-			out := make([]map[string]interface{}, len(reqs))
+			out := make([]map[string]any, len(reqs))
 			for i, req := range reqs {
 				out[i] = answer(req)
 			}

@@ -31,9 +31,9 @@ func TestAuditExamples(t *testing.T) {
 		case b.AllegroGasLimit > 0:
 			gas = fmt.Sprintf("%d", b.AllegroGasLimit)
 		default:
-			if gp, ok := b.GenesisPatch["consensus"].(map[string]interface{}); ok {
-				if p, ok := gp["params"].(map[string]interface{}); ok {
-					if blk, ok := p["block"].(map[string]interface{}); ok {
+			if gp, ok := b.GenesisPatch["consensus"].(map[string]any); ok {
+				if p, ok := gp["params"].(map[string]any); ok {
+					if blk, ok := p["block"].(map[string]any); ok {
 						gas = fmt.Sprintf("%v", blk["max_gas"])
 					}
 				}

@@ -42,21 +42,15 @@ func main() {
 	}
 
 	run, err := c.ExecuteWorkflow(context.Background(), startOpts, workflows.StatelessEVMBenchmarkWorkflow, messages.WorkflowRequest{Spec: cfg.Benchmark})
-	startedNew := true
-	if err != nil {
-		var alreadyStartedErr *serviceerror.WorkflowExecutionAlreadyStarted
-		if errors.As(err, &alreadyStartedErr) {
-			startedNew = false
-			run = c.GetWorkflow(context.Background(), cfg.Start.WorkflowID, "")
-		} else {
-			log.Fatalf("start workflow: %v", err)
-		}
-	}
-
-	if startedNew {
+	var alreadyStartedErr *serviceerror.WorkflowExecutionAlreadyStarted
+	switch {
+	case err == nil:
 		fmt.Printf("workflow started: id=%s run_id=%s\n", run.GetID(), run.GetRunID())
-	} else {
+	case errors.As(err, &alreadyStartedErr):
+		run = c.GetWorkflow(context.Background(), cfg.Start.WorkflowID, "")
 		fmt.Printf("workflow already running: id=%s (attached to existing execution)\n", run.GetID())
+	default:
+		log.Fatalf("start workflow: %v", err)
 	}
 
 	var res messages.WorkflowResponse
@@ -117,9 +111,5 @@ func isRetryableGetError(err error) bool {
 	}
 
 	var unavailableErr *serviceerror.Unavailable
-	if errors.As(err, &unavailableErr) {
-		return true
-	}
-
-	return false
+	return errors.As(err, &unavailableErr)
 }

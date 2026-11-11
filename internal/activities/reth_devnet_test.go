@@ -132,12 +132,12 @@ func TestRethGenesisFundsSigner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rethGenesis: %v", err)
 	}
-	alloc := genesis["alloc"].(map[string]interface{})
-	token, ok := alloc[allocKey(rethTokenAddress)].(map[string]interface{})
+	alloc := genesis["alloc"].(map[string]any)
+	token, ok := alloc[allocKey(rethTokenAddress)].(map[string]any)
 	if !ok {
 		t.Fatalf("token not deployed at %s", rethTokenAddress.Hex())
 	}
-	storage := token["storage"].(map[string]interface{})
+	storage := token["storage"].(map[string]any)
 	for _, node := range nodes {
 		for _, sender := range signedSenders(t, spec, node.GlobalSeq) {
 			if _, ok := alloc[allocKey(sender)]; !ok {
@@ -166,7 +166,7 @@ func TestRethGenesisTokenOnlyForItsLoad(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: rethGenesis: %v", name, err)
 		}
-		if _, ok := genesis["alloc"].(map[string]interface{})[allocKey(rethTokenAddress)]; ok {
+		if _, ok := genesis["alloc"].(map[string]any)[allocKey(rethTokenAddress)]; ok {
 			t.Errorf("%s: token deployed although the load does not use it", name)
 		}
 	}
@@ -183,7 +183,7 @@ func TestRethGenesisPatchWins(t *testing.T) {
 	if got := genesis["gasLimit"]; got != "0x3b9aca00" {
 		t.Errorf("gasLimit = %v, want the hex quantity 0x3b9aca00", got)
 	}
-	spec.GenesisPatch = map[string]interface{}{"gasLimit": "0x1"}
+	spec.GenesisPatch = map[string]any{"gasLimit": "0x1"}
 	if genesis, err = rethGenesis(spec, []messages.NodeTarget{rethTestProducer}); err != nil {
 		t.Fatal(err)
 	}

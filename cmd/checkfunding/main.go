@@ -187,7 +187,7 @@ func tokenBalance(ctx context.Context, client *http.Client, rpcURL, token string
 	call := map[string]string{"to": token, "data": "0x" + common.Bytes2Hex(tempotx.BalanceOf(holder))}
 
 	var result string
-	if err := bench.JSONRPCCall(ctx, client, rpcURL, "eth_call", []interface{}{call, "latest"}, &result); err != nil {
+	if err := bench.JSONRPCCall(ctx, client, rpcURL, "eth_call", []any{call, "latest"}, &result); err != nil {
 		return nil, err
 	}
 	value, ok := new(big.Int).SetString(strings.TrimPrefix(result, "0x"), 16)
@@ -200,7 +200,7 @@ func tokenBalance(ctx context.Context, client *http.Client, rpcURL, token string
 func pendingNonce(ctx context.Context, client *http.Client, rpcURL string, addr common.Address) (uint64, error) {
 	var hexNonce string
 	if err := bench.JSONRPCCall(ctx, client, rpcURL, "eth_getTransactionCount",
-		[]interface{}{addr.Hex(), "pending"}, &hexNonce); err != nil {
+		[]any{addr.Hex(), "pending"}, &hexNonce); err != nil {
 		return 0, err
 	}
 	value, ok := new(big.Int).SetString(strings.TrimPrefix(hexNonce, "0x"), 16)
@@ -210,7 +210,7 @@ func pendingNonce(ctx context.Context, client *http.Client, rpcURL string, addr 
 	return value.Uint64(), nil
 }
 
-func fatal(format string, args ...interface{}) {
+func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "FAIL: "+format+"\n", args...)
 	os.Exit(1)
 }
