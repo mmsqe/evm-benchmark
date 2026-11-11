@@ -115,7 +115,7 @@ func TestTempoRejectsMultiNodeLegacyLoad(t *testing.T) {
 func TestTempoComposeProjectIsStableAndScoped(t *testing.T) {
 	a := messages.BenchmarkSpec{DataDir: "/tmp/one"}
 	b := messages.BenchmarkSpec{DataDir: "/tmp/two"}
-	if tempoComposeProject(a) != tempoComposeProject(a) {
+	if again := (messages.BenchmarkSpec{DataDir: "/tmp/one"}); tempoComposeProject(a) != tempoComposeProject(again) {
 		t.Error("project name must be stable for a data dir")
 	}
 	if tempoComposeProject(a) == tempoComposeProject(b) {

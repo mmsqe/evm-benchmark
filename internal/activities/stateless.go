@@ -323,107 +323,25 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 		return messages.NodeRunResult{}, fmt.Errorf("load node txs: %w", err)
 	}
 
-	containerName := ""
 	if err := chain.Validate(spec); err != nil {
 		return messages.NodeRunResult{}, err
 	}
 	if err := chain.PreStartCheck(spec, target); err != nil {
 		return messages.NodeRunResult{}, err
 	}
+	containerName := ""
 	if spec.StartNode {
-
+		var stop func()
 		if spec.RunnerType == "docker" {
-			if _, err := chainCmd(ctx, "docker", nil, "network", "create", spec.DockerNetwork); err != nil && !strings.Contains(err.Error(), "already exists") {
-				return messages.NodeRunResult{}, fmt.Errorf("create docker network %q: %w", spec.DockerNetwork, err)
-			}
-			if err := ensureDockerVolumeHostDirs(spec.DockerVolumes); err != nil {
-				return messages.NodeRunResult{}, fmt.Errorf("prepare docker volume host dirs: %w", err)
-			}
-
-			containerName = fmt.Sprintf("evm-benchmark-%d", target.GlobalSeq)
-			containerHome := path.Join("/data", target.Group, fmt.Sprintf("%d", target.GroupSeq))
-			// The node home is mounted from the host unless the layout is in the
-			// image already: patched in, reused, or never generated here.
-			_, statErr := os.Stat(filepath.Join(target.Home, "config", "genesis.json"))
-			mountHome := req.DockerImageOverride == "" && !spec.SkipGenerateLayout && statErr == nil
-
-			dockerArgs := []string{"run", "-d"}
-			if !spec.DockerKeepContainers {
-				dockerArgs = append(dockerArgs, "--rm")
-			}
-			dockerArgs = append(dockerArgs,
-				"--name", containerName,
-				"--hostname", target.Hostname,
-				"--network", spec.DockerNetwork,
-				"-p", fmt.Sprintf("%d:26657", target.HostRPCPort),
-				"-p", fmt.Sprintf("%d:8545", target.HostEVMRPCPort),
-			)
-			if mountHome {
-				dockerArgs = append(dockerArgs, "-v", fmt.Sprintf("%s:%s", target.Home, containerHome))
-			}
-			for _, volume := range spec.DockerVolumes {
-				if volume = strings.TrimSpace(volume); volume != "" {
-					dockerArgs = append(dockerArgs, "-v", volume)
-				}
-			}
-			for _, k := range slices.Sorted(maps.Keys(spec.DockerEnv)) {
-				dockerArgs = append(dockerArgs, "-e", fmt.Sprintf("%s=%s", k, spec.DockerEnv[k]))
-			}
-			dockerArgs = append(dockerArgs,
-				cmp.Or(req.DockerImageOverride, spec.DockerImage),
-				"/bin/"+path.Base(spec.Binary),
-				"start", "--home", containerHome,
-			)
-			dockerArgs = append(dockerArgs, dockerDefaultBindArgs(spec.StartArgs)...)
-			if strings.TrimSpace(spec.ChainID) != "" {
-				dockerArgs = append(dockerArgs, "--chain-id", spec.ChainID)
-			}
-			dockerArgs = append(dockerArgs, spec.StartArgs...)
-			if _, err := chainCmd(ctx, "docker", nil, dockerArgs...); err != nil {
-				return messages.NodeRunResult{}, fmt.Errorf("start node docker container: %w", err)
-			}
-			if !spec.DockerKeepContainers {
-				defer func() {
-					if containerName != "" {
-						_, _ = chainCmd(context.Background(), "docker", nil, "rm", "-f", containerName)
-					}
-				}()
-			}
+			containerName, stop, err = startDockerNode(ctx, spec, target, req.DockerImageOverride)
 		} else {
 			argv, dir := chain.LocalStartCommand(spec, target)
-			logHome := target.Home
-			if dir != "" {
-				logHome = dir
-			}
-			logPath := filepath.Join(logHome, "node.log")
-			logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-			if err != nil {
-				return messages.NodeRunResult{}, fmt.Errorf("open node log file: %w", err)
-			}
-			defer logFile.Close()
-			var stopRun context.CancelCauseFunc
-			ctx, stopRun = context.WithCancelCause(ctx)
-			defer stopRun(nil)
-			proc := exec.CommandContext(ctx, argv[0], argv[1:]...)
-			proc.Dir = dir
-			proc.Stdout = logFile
-			proc.Stderr = logFile
-			// SIGTERM first so the node can flush; killed if still up after WaitDelay.
-			proc.Cancel = func() error { return proc.Process.Signal(syscall.SIGTERM) }
-			proc.WaitDelay = 5 * time.Second
-			if err := proc.Start(); err != nil {
-				return messages.NodeRunResult{}, fmt.Errorf("start node process: %w", err)
-			}
-			// The node exiting ends the run, with the end of its log as the cause.
-			exited := make(chan struct{})
-			go func() {
-				err := proc.Wait()
-				tail, _ := os.ReadFile(logPath)
-				stopRun(fmt.Errorf("node process exited (%v); end of %s:\n%s", err, logPath, tail[max(0, len(tail)-2048):]))
-				close(exited)
-			}()
-			defer func() { stopRun(nil); <-exited }()
+			ctx, stop, err = startLocalNode(ctx, argv, dir, filepath.Join(cmp.Or(dir, target.Home), "node.log"))
 		}
+		if err != nil {
+			return messages.NodeRunResult{}, err
+		}
+		defer stop()
 	}
 
 	// waitPort gives up on a port with the container's log or the node's exit
@@ -480,6 +398,37 @@ func (a *Activity) RunNode(ctx context.Context, req messages.RunNodeRequest) (me
 		err = reportNodeMetrics(ctx, client, reporter, spec, target, res.StatsFile)
 	}
 	return res, withCause(ctx, err)
+}
+
+// startLocalNode launches the node with its output appended to logPath. The
+// returned context ends when the node exits, with the end of its log as the
+// cause; stop terminates the node and waits for it.
+func startLocalNode(ctx context.Context, argv []string, dir, logPath string) (context.Context, func(), error) {
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return ctx, nil, fmt.Errorf("open node log file: %w", err)
+	}
+	ctx, stopRun := context.WithCancelCause(ctx)
+	proc := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	proc.Dir = dir
+	proc.Stdout = logFile
+	proc.Stderr = logFile
+	// SIGTERM first so the node can flush; killed if still up after WaitDelay.
+	proc.Cancel = func() error { return proc.Process.Signal(syscall.SIGTERM) }
+	proc.WaitDelay = 5 * time.Second
+	if err := proc.Start(); err != nil {
+		stopRun(nil)
+		logFile.Close()
+		return ctx, nil, fmt.Errorf("start node process: %w", err)
+	}
+	exited := make(chan struct{})
+	go func() {
+		err := proc.Wait()
+		tail, _ := os.ReadFile(logPath)
+		stopRun(fmt.Errorf("node process exited (%v); end of %s:\n%s", err, logPath, tail[max(0, len(tail)-2048):]))
+		close(exited)
+	}()
+	return ctx, func() { stopRun(nil); <-exited; logFile.Close() }, nil
 }
 
 // withCause appends to err why ctx was canceled, such as the node's exit and the
@@ -608,43 +557,8 @@ func doRun(
 	defer statsFile.Close()
 	w := bufio.NewWriter(statsFile) // writes are checked once, at the flush
 
-	// Written before the block stats so the two rates sit together in the file:
-	// an inclusion rate at or below the send rate, with the pool never deep,
-	// means the run measured submission rather than execution.
-	fmt.Fprintf(w,
-		"send_summary sent=%d seconds=%.2f rate=%.0f max_pending=%d rejected=%d failed=%d req_p50=%.2fs req_p95=%.2fs req_max=%.2fs\n",
-		sendStats.Sent, sendStats.Duration.Seconds(), sendStats.Rate(), sendStats.MaxPending,
-		sendStats.Rejected, sendStats.Failed, sendStats.ReqP50.Seconds(), sendStats.ReqP95.Seconds(),
-		sendStats.ReqMax.Seconds())
-	if sendStats.Failed > 0 {
-		fmt.Fprintf(w,
-			"send_warning %d transactions were in requests the node never answered (broadcast_request_timeout_seconds=%d); "+
-				"those it admitted anyway are counted below, the rest are missing.\n",
-			sendStats.Failed, spec.BroadcastRequestTimeoutSeconds)
-	}
-	reasons := slices.Collect(maps.Keys(sendStats.RejectReasons))
-	slices.SortFunc(reasons, func(a, b string) int { return sendStats.RejectReasons[b] - sendStats.RejectReasons[a] })
-	for _, msg := range reasons {
-		fmt.Fprintf(w, "send_reject count=%d reason=%q\n", sendStats.RejectReasons[msg], msg)
-	}
-	if sendStats.PoolStalled {
-		fmt.Fprint(w,
-			"send_warning the pool stopped draining above the watermark, so the rest was sent without waiting: "+
-				"the node may be holding transactions it never forwards.\n")
-	}
-	if sendStats.PoolUnknown && sendStats.Sent > 0 {
-		fmt.Fprint(w,
-			"send_warning the pool was never read (no txpool_status, or too small a load to sample), so "+
-				"whether the chain ever fell behind the sender is unknown: this rate is a lower bound.\n")
-	}
+	writeSendSummary(w, sendStats, spec.BroadcastRequestTimeoutSeconds)
 	if sendStats.Undersaturated() {
-		// Passing the whole-seconds check does not imply this: a run can span
-		// plenty of seconds while the chain drains everything as it arrives.
-		fmt.Fprintf(w,
-			"send_warning the pool never held more than %d transactions (%.0f%% of the load): the chain kept "+
-				"pace with the sender, so this rate is a lower bound on it, not a measurement. Raise the load, "+
-				"or constrain the chain (block gas limit) so block production binds.\n",
-			sendStats.MaxPending, 100*float64(sendStats.MaxPending)/float64(sendStats.Sent))
 		logger.Warn("chain kept pace with the sender; rate is a lower bound",
 			"node", target.GlobalSeq, "max_pending", sendStats.MaxPending, "sent", sendStats.Sent)
 	}
@@ -690,6 +604,48 @@ func doRun(
 		TopTPS:        topTPS,
 		StatsFile:     statsPath,
 	}, nil
+}
+
+// writeSendSummary writes how the send went, ahead of the block stats so the two
+// rates sit together in the file: an inclusion rate at or below the send rate,
+// with the pool never deep, means the run measured submission rather than
+// execution.
+func writeSendSummary(w io.Writer, sendStats bench.BroadcastStats, requestTimeoutSeconds int) {
+	fmt.Fprintf(w,
+		"send_summary sent=%d seconds=%.2f rate=%.0f max_pending=%d rejected=%d failed=%d req_p50=%.2fs req_p95=%.2fs req_max=%.2fs\n",
+		sendStats.Sent, sendStats.Duration.Seconds(), sendStats.Rate(), sendStats.MaxPending,
+		sendStats.Rejected, sendStats.Failed, sendStats.ReqP50.Seconds(), sendStats.ReqP95.Seconds(),
+		sendStats.ReqMax.Seconds())
+	if sendStats.Failed > 0 {
+		fmt.Fprintf(w,
+			"send_warning %d transactions were in requests the node never answered (broadcast_request_timeout_seconds=%d); "+
+				"those it admitted anyway are counted below, the rest are missing.\n",
+			sendStats.Failed, requestTimeoutSeconds)
+	}
+	reasons := slices.Collect(maps.Keys(sendStats.RejectReasons))
+	slices.SortFunc(reasons, func(a, b string) int { return sendStats.RejectReasons[b] - sendStats.RejectReasons[a] })
+	for _, msg := range reasons {
+		fmt.Fprintf(w, "send_reject count=%d reason=%q\n", sendStats.RejectReasons[msg], msg)
+	}
+	if sendStats.PoolStalled {
+		fmt.Fprint(w,
+			"send_warning the pool stopped draining above the watermark, so the rest was sent without waiting: "+
+				"the node may be holding transactions it never forwards.\n")
+	}
+	if sendStats.PoolUnknown && sendStats.Sent > 0 {
+		fmt.Fprint(w,
+			"send_warning the pool was never read (no txpool_status, or too small a load to sample), so "+
+				"whether the chain ever fell behind the sender is unknown: this rate is a lower bound.\n")
+	}
+	if sendStats.Undersaturated() {
+		// Passing the whole-seconds check does not imply this: a run can span
+		// plenty of seconds while the chain drains everything as it arrives.
+		fmt.Fprintf(w,
+			"send_warning the pool never held more than %d transactions (%.0f%% of the load): the chain kept "+
+				"pace with the sender, so this rate is a lower bound on it, not a measurement. Raise the load, "+
+				"or constrain the chain (block gas limit) so block production binds.\n",
+			sendStats.MaxPending, 100*float64(sendStats.MaxPending)/float64(sendStats.Sent))
+	}
 }
 
 // reportNodeMetrics saves the node's metrics as metrics.prom beside its stats
@@ -831,6 +787,65 @@ func copyDir(src, dst string) error {
 	})
 }
 
+// startDockerNode runs the node's container, returning its name and what stops
+// it: removal, unless docker_keep_containers leaves it for `docker logs`.
+func startDockerNode(ctx context.Context, spec messages.BenchmarkSpec, target messages.NodeTarget, imageOverride string) (string, func(), error) {
+	if _, err := chainCmd(ctx, "docker", nil, "network", "create", spec.DockerNetwork); err != nil && !strings.Contains(err.Error(), "already exists") {
+		return "", nil, fmt.Errorf("create docker network %q: %w", spec.DockerNetwork, err)
+	}
+	if err := ensureDockerVolumeHostDirs(spec.DockerVolumes); err != nil {
+		return "", nil, fmt.Errorf("prepare docker volume host dirs: %w", err)
+	}
+
+	name := fmt.Sprintf("evm-benchmark-%d", target.GlobalSeq)
+	containerHome := path.Join("/data", target.Group, strconv.Itoa(target.GroupSeq))
+	// The node home is mounted from the host unless the layout is in the
+	// image already: patched in, reused, or never generated here.
+	_, statErr := os.Stat(filepath.Join(target.Home, "config", "genesis.json"))
+	mountHome := imageOverride == "" && !spec.SkipGenerateLayout && statErr == nil
+
+	args := []string{"run", "-d"}
+	if !spec.DockerKeepContainers {
+		args = append(args, "--rm")
+	}
+	args = append(args,
+		"--name", name,
+		"--hostname", target.Hostname,
+		"--network", spec.DockerNetwork,
+		"-p", fmt.Sprintf("%d:26657", target.HostRPCPort),
+		"-p", fmt.Sprintf("%d:8545", target.HostEVMRPCPort),
+	)
+	if mountHome {
+		args = append(args, "-v", fmt.Sprintf("%s:%s", target.Home, containerHome))
+	}
+	for _, volume := range spec.DockerVolumes {
+		if volume = strings.TrimSpace(volume); volume != "" {
+			args = append(args, "-v", volume)
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(spec.DockerEnv)) {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", k, spec.DockerEnv[k]))
+	}
+	args = append(args,
+		cmp.Or(imageOverride, spec.DockerImage),
+		"/bin/"+path.Base(spec.Binary),
+		"start", "--home", containerHome,
+	)
+	args = append(args, dockerDefaultBindArgs(spec.StartArgs)...)
+	if strings.TrimSpace(spec.ChainID) != "" {
+		args = append(args, "--chain-id", spec.ChainID)
+	}
+	args = append(args, spec.StartArgs...)
+	if _, err := chainCmd(ctx, "docker", nil, args...); err != nil {
+		return "", nil, fmt.Errorf("start node docker container: %w", err)
+	}
+	stop := func() {}
+	if !spec.DockerKeepContainers {
+		stop = func() { _, _ = chainCmd(context.Background(), "docker", nil, "rm", "-f", name) }
+	}
+	return name, stop, nil
+}
+
 func ensureDockerVolumeHostDirs(volumes []string) error {
 	for _, volume := range volumes {
 		volume = strings.TrimSpace(volume)
@@ -907,12 +922,18 @@ func bootstrapNodesAndGenesis(ctx context.Context, spec messages.BenchmarkSpec, 
 		return fmt.Errorf("benchmark.binary is required for bootstrap")
 	}
 
-	// Every validator's gentx lands here for collect-gentxs.
-	gentxDir, err := os.MkdirTemp("", "evm-benchmark-gentx-")
+	// Scratch space: every validator's gentx for collect-gentxs, and the bulk
+	// account list.
+	workDir, err := os.MkdirTemp("", "evm-benchmark-genesis-")
 	if err != nil {
+		return fmt.Errorf("create genesis work dir: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+	gentxDir := filepath.Join(workDir, "gentx")
+	if err := os.Mkdir(gentxDir, 0o755); err != nil {
 		return fmt.Errorf("create gentx dir: %w", err)
 	}
-	defer os.RemoveAll(gentxDir)
+	bulkPath := filepath.Join(workDir, "accounts.json")
 
 	for _, node := range nodes {
 		if err := os.RemoveAll(node.Home); err != nil {
@@ -1017,21 +1038,9 @@ func bootstrapNodesAndGenesis(ctx context.Context, spec messages.BenchmarkSpec, 
 		}
 	}
 
-	bulkTmp, err := os.CreateTemp("", "bulk-genesis-accounts-*.json")
-	if err != nil {
-		return fmt.Errorf("create temporary bulk genesis accounts file: %w", err)
+	if err := writeJSON(bulkPath, accounts); err != nil {
+		return err
 	}
-	bulkPath := bulkTmp.Name()
-	if err := json.NewEncoder(bulkTmp).Encode(accounts); err != nil {
-		_ = bulkTmp.Close()
-		_ = os.Remove(bulkPath)
-		return fmt.Errorf("encode bulk genesis accounts: %w", err)
-	}
-	if err := bulkTmp.Close(); err != nil {
-		_ = os.Remove(bulkPath)
-		return fmt.Errorf("close temporary bulk genesis accounts file: %w", err)
-	}
-	defer os.Remove(bulkPath)
 	leaderGenesis := filepath.Join(leaderHome, "config", "genesis.json")
 
 	if _, err := chainCmd(ctx, spec.Binary, nil,
@@ -1261,11 +1270,8 @@ func runtimeGeneratedTxs(spec messages.BenchmarkSpec) bool {
 	if err != nil {
 		return false
 	}
-	producer, ok := chain.(txProducer)
-	if !ok {
-		return false
-	}
 	// Ask the producer itself whether it is configured, so a future family
 	// implementing txProducer is not silently re-signed by the legacy signer.
-	return producer.ProducesTxs(spec)
+	producer, ok := chain.(txProducer)
+	return ok && producer.ProducesTxs(spec)
 }
