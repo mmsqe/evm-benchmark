@@ -54,14 +54,6 @@ func postJSON(ctx context.Context, client *http.Client, url string, req, out any
 	if err != nil {
 		return fmt.Errorf("marshal rpc request: %w", err)
 	}
-	wait := func(d time.Duration) error {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(d):
-			return nil
-		}
-	}
 	for attempt, failures := 0, 0; ; attempt++ {
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
@@ -72,7 +64,7 @@ func postJSON(ctx context.Context, client *http.Client, url string, req, out any
 		resp, err := client.Do(httpReq)
 		if err == nil && resp.StatusCode == http.StatusTooManyRequests && attempt < rateLimitRetries {
 			resp.Body.Close()
-			if err := wait(retryAfter(resp.Header.Get("Retry-After"))); err != nil {
+			if err := sleep(ctx, retryAfter(resp.Header.Get("Retry-After"))); err != nil {
 				return err
 			}
 			continue
@@ -83,7 +75,7 @@ func postJSON(ctx context.Context, client *http.Client, url string, req, out any
 		}
 		if err != nil {
 			if failures++; failures <= failedRetries {
-				if err := wait(retryBackoff); err != nil {
+				if err := sleep(ctx, retryBackoff); err != nil {
 					return err
 				}
 				continue
@@ -298,10 +290,8 @@ func awaitPoolRoom(ctx context.Context, client *http.Client, rpcURL string, wate
 			fmt.Printf("[bench] pool stuck at %d pending for %s: sending the rest without waiting\n", pending, poolStallTimeout)
 			return true
 		}
-		select {
-		case <-ctx.Done():
+		if sleep(ctx, backoff) != nil {
 			return false
-		case <-time.After(backoff):
 		}
 	}
 }

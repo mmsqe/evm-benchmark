@@ -8,6 +8,16 @@ import (
 	"time"
 )
 
+// sleep waits d, or returns the context's error if it ends first.
+func sleep(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
 func WaitForPort(ctx context.Context, host string, port int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	addr := fmt.Sprintf("%s:%d", host, port)
@@ -21,10 +31,8 @@ func WaitForPort(ctx context.Context, host string, port int, timeout time.Durati
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timeout waiting for %s: %w", addr, err)
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+		if err := sleep(ctx, 100*time.Millisecond); err != nil {
+			return err
 		}
 	}
 }
@@ -42,10 +50,8 @@ func WaitForHeight(ctx context.Context, client *http.Client, rpcURL string, targ
 			}
 			return fmt.Errorf("timeout waiting for height %d, latest %d", target, h)
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
+		if err := sleep(ctx, time.Second); err != nil {
+			return err
 		}
 	}
 }
@@ -61,10 +67,8 @@ func DetectIdleOrHalt(ctx context.Context, client *http.Client, rpcURL string, i
 			if time.Since(lastProgressAt) >= haltAfter {
 				return fmt.Errorf("node unreachable for %s after height %d: %w", haltAfter, lastHeight, err)
 			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(pollInterval):
+			if err := sleep(ctx, pollInterval); err != nil {
+				return err
 			}
 			continue
 		}
@@ -73,25 +77,7 @@ func DetectIdleOrHalt(ctx context.Context, client *http.Client, rpcURL string, i
 			lastHeight = h
 			lastProgressAt = time.Now()
 
-			idle := true
-			checked := 0
-			for i := int64(0); i < int64(idleBlocks); i++ {
-				target := h - i
-				if target <= 0 {
-					idle = false
-					break
-				}
-				checked++
-				blk, err := BlockByNumber(ctx, client, rpcURL, target)
-				if err != nil {
-					idle = false
-					break
-				}
-				if len(blk.Transactions) > 0 {
-					idle = false
-					break
-				}
-			}
+			checked, idle := emptyBlocks(ctx, client, rpcURL, h, idleBlocks)
 			if idle {
 				pending, queued, err := TxPoolStatus(ctx, client, rpcURL)
 				if err != nil {
@@ -110,12 +96,25 @@ func DetectIdleOrHalt(ctx context.Context, client *http.Client, rpcURL string, i
 			return nil
 		}
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(pollInterval):
+		if err := sleep(ctx, pollInterval); err != nil {
+			return err
 		}
 	}
+}
+
+// emptyBlocks reads back from head and reports whether the last want blocks
+// exist and are all empty, and how many it read before finding otherwise.
+func emptyBlocks(ctx context.Context, client *http.Client, rpcURL string, head int64, want int) (checked int, idle bool) {
+	for height := head; checked < want; height-- {
+		if height <= 0 {
+			return checked, false
+		}
+		checked++
+		if blk, err := BlockByNumber(ctx, client, rpcURL, height); err != nil || len(blk.Transactions) > 0 {
+			return checked, false
+		}
+	}
+	return checked, true
 }
 
 // WaitForTxs is DetectIdleOrHalt for a shared chain, whose blocks are never
@@ -164,10 +163,8 @@ func WaitForTxs(ctx context.Context, client *http.Client, rpcURL string, own TxS
 			return nil
 		}
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(pollInterval):
+		if err := sleep(ctx, pollInterval); err != nil {
+			return err
 		}
 	}
 }
